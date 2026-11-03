@@ -27,11 +27,12 @@ import (
 // the provider login. The deployment credential binds the platform and shard;
 // client-supplied handles and Matrix user IDs are never ownership proof.
 type LoginAdmissionRequest struct {
-	Version       int                   `json:"version"`
-	Platform      string                `json:"platform"`
-	ShardID       string                `json:"shard_id"`
-	CandidateMXID id.UserID             `json:"candidate_mxid"`
-	LoginID       networkid.UserLoginID `json:"login_id"`
+	Version        int                   `json:"version"`
+	Platform       string                `json:"platform"`
+	ShardID        string                `json:"shard_id"`
+	CandidateMXID  id.UserID             `json:"candidate_mxid"`
+	LoginID        networkid.UserLoginID `json:"login_id"`
+	ProviderUserID string                `json:"provider_user_id,omitempty"`
 }
 
 type LoginAdmission struct {
@@ -46,7 +47,7 @@ type LoginAdmission struct {
 // LoginAdmissionResolver selects a permanent Matrix owner and original shard.
 // It must never merge customers or move existing logins between shards.
 type LoginAdmissionResolver interface {
-	ResolveLogin(context.Context, id.UserID, networkid.UserLoginID) (*LoginAdmission, error)
+	ResolveLogin(context.Context, id.UserID, networkid.UserLoginID, string) (*LoginAdmission, error)
 }
 
 type httpLoginAdmission struct {
@@ -74,7 +75,7 @@ func NewHTTPLoginAdmission(config bridgeconfig.LoginAdmissionConfig) *httpLoginA
 	}}
 }
 
-func (resolver *httpLoginAdmission) ResolveLogin(ctx context.Context, candidate id.UserID, loginID networkid.UserLoginID) (*LoginAdmission, error) {
+func (resolver *httpLoginAdmission) ResolveLogin(ctx context.Context, candidate id.UserID, loginID networkid.UserLoginID, providerUserID string) (*LoginAdmission, error) {
 	cfg := resolver.config
 	endpoint, err := url.Parse(cfg.URL)
 	if err != nil || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" ||
@@ -85,7 +86,7 @@ func (resolver *httpLoginAdmission) ResolveLogin(ctx context.Context, candidate 
 	if endpoint.Scheme != "https" && !(endpoint.Scheme == "http" && (cfg.AllowInsecureHTTP || endpoint.Hostname() == "localhost" || host != nil && host.IsLoopback())) {
 		return nil, ErrLoginAdmissionUnavailable
 	}
-	body, err := json.Marshal(LoginAdmissionRequest{1, cfg.Platform, cfg.ShardID, candidate, loginID})
+	body, err := json.Marshal(LoginAdmissionRequest{1, cfg.Platform, cfg.ShardID, candidate, loginID, providerUserID})
 	if err != nil {
 		return nil, ErrLoginAdmissionUnavailable
 	}
@@ -138,7 +139,7 @@ func validLoginAdmission(decision *LoginAdmission, candidate id.UserID, loginID 
 	return candidateErr == nil && ownerErr == nil && ownerLocalpart != "" && candidateServer == ownerServer
 }
 
-func (user *User) resolveLoginAdmission(ctx context.Context, loginID networkid.UserLoginID) (*User, *LoginAdmission, error) {
+func (user *User) resolveLoginAdmission(ctx context.Context, loginID networkid.UserLoginID, providerUserID string) (*User, *LoginAdmission, error) {
 	resolver := user.Bridge.LoginAdmission
 	if resolver == nil && user.Bridge.Config != nil && user.Bridge.Config.LoginAdmission != nil {
 		resolver = NewHTTPLoginAdmission(*user.Bridge.Config.LoginAdmission)
@@ -146,7 +147,7 @@ func (user *User) resolveLoginAdmission(ctx context.Context, loginID networkid.U
 	if resolver == nil {
 		return user, nil, nil
 	}
-	decision, err := resolver.ResolveLogin(ctx, user.MXID, loginID)
+	decision, err := resolver.ResolveLogin(ctx, user.MXID, loginID, providerUserID)
 	if err != nil {
 		return nil, nil, err
 	}
