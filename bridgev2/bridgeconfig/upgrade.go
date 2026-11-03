@@ -24,6 +24,7 @@ func doUpgrade(helper up.Helper) {
 		return
 	}
 
+	helper.Copy(up.Map|up.Null, "bridge", "login_admission")
 	helper.Copy(up.Str, "bridge", "command_prefix")
 	helper.Copy(up.Bool, "bridge", "personal_filtering_spaces")
 	helper.Copy(up.Bool, "bridge", "private_chat_portal_meta")

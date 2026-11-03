@@ -176,7 +176,7 @@ func (ls *LoginStep) MarshalZerologObject(e *zerolog.Event) {
 		e.Any("webauthn", ls.WebAuthnParams)
 	}
 	if ls.CompleteParams != nil {
-		e.Any("complete", ls.CompleteParams)
+		e.Str("completed_user_login_id", string(ls.CompleteParams.UserLoginID))
 	}
 }
 
@@ -460,8 +460,9 @@ type LoginUserInputAttachmentInfo struct {
 }
 
 type LoginCompleteParams struct {
-	UserLoginID networkid.UserLoginID `json:"user_login_id"`
-	UserLogin   *UserLogin            `json:"-"`
+	LoginAdmission *LoginAdmission       `json:"login_admission,omitempty"`
+	UserLoginID    networkid.UserLoginID `json:"user_login_id"`
+	UserLogin      *UserLogin            `json:"-"`
 }
 
 type LoginSubmit struct {

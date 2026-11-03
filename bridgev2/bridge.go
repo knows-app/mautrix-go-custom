@@ -35,11 +35,12 @@ type Bridge struct {
 	DB  *database.Database
 	Log zerolog.Logger
 
-	Matrix   MatrixConnector
-	Bot      MatrixAPI
-	Network  NetworkConnector
-	Commands CommandProcessor
-	Config   *bridgeconfig.BridgeConfig
+	Matrix         MatrixConnector
+	Bot            MatrixAPI
+	Network        NetworkConnector
+	LoginAdmission LoginAdmissionResolver
+	Commands       CommandProcessor
+	Config         *bridgeconfig.BridgeConfig
 
 	DisappearLoop *DisappearLoop
 
