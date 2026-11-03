@@ -20,10 +20,10 @@ import (
 	"maunium.net/go/mautrix/id"
 )
 
-type admissionResolverFunc func(context.Context, id.UserID, networkid.UserLoginID) (*LoginAdmission, error)
+type admissionResolverFunc func(context.Context, id.UserID, networkid.UserLoginID, string) (*LoginAdmission, error)
 
-func (f admissionResolverFunc) ResolveLogin(ctx context.Context, user id.UserID, login networkid.UserLoginID) (*LoginAdmission, error) {
-	return f(ctx, user, login)
+func (f admissionResolverFunc) ResolveLogin(ctx context.Context, user id.UserID, login networkid.UserLoginID, providerUserID string) (*LoginAdmission, error) {
+	return f(ctx, user, login, providerUserID)
 }
 
 type admissionTestClient struct {
@@ -72,7 +72,7 @@ func decisionFor(candidate id.UserID, loginID networkid.UserLoginID) *LoginAdmis
 
 func TestLoginAdmissionReusesPermanentOwnerWithoutDeletingRooms(t *testing.T) {
 	candidate, existing, raw := admissionFixture(t)
-	candidate.Bridge.LoginAdmission = admissionResolverFunc(func(ctx context.Context, user id.UserID, login networkid.UserLoginID) (*LoginAdmission, error) {
+	candidate.Bridge.LoginAdmission = admissionResolverFunc(func(ctx context.Context, user id.UserID, login networkid.UserLoginID, providerUserID string) (*LoginAdmission, error) {
 		// Network work must happen outside the shared cache lock.
 		require.True(t, candidate.Bridge.cacheLock.TryLock())
 		candidate.Bridge.cacheLock.Unlock()
@@ -105,7 +105,7 @@ func TestLoginAdmissionFailureNeverReachesLoginReplacement(t *testing.T) {
 			candidate, existing, raw := admissionFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			candidate.Bridge.LoginAdmission = admissionResolverFunc(func(ctx context.Context, user id.UserID, login networkid.UserLoginID) (*LoginAdmission, error) {
+			candidate.Bridge.LoginAdmission = admissionResolverFunc(func(ctx context.Context, user id.UserID, login networkid.UserLoginID, providerUserID string) (*LoginAdmission, error) {
 				if mode == "unavailable" {
 					return nil, errors.New("service down")
 				}
@@ -168,7 +168,7 @@ func TestLoginAdmissionHTTPIdentityAndShardBoundary(t *testing.T) {
 			}))
 			defer server.Close()
 			resolver := NewHTTPLoginAdmission(bridgeconfig.LoginAdmissionConfig{URL: server.URL, Secret: "shard-secret", Platform: "telegram", ShardID: "tg01"})
-			result, err := resolver.ResolveLogin(context.Background(), "@user_99:localhost", "remote-1")
+			result, err := resolver.ResolveLogin(context.Background(), "@user_99:localhost", "remote-1", "")
 			if mode == "ok" {
 				require.NoError(t, err)
 				require.Equal(t, id.UserID("@user_7:localhost"), result.OwnerMXID)
@@ -203,4 +203,32 @@ func TestLoginAdmissionCaptureIsPerAttemptAndProofIsNotLogged(t *testing.T) {
 	logger.Info().Object("step", &LoginStep{Type: LoginStepTypeComplete, CompleteParams: &LoginCompleteParams{UserLoginID: "remote-1", LoginAdmission: d1}}).Msg("complete")
 	require.NotContains(t, log.String(), "opaque-proof")
 	require.Contains(t, log.String(), "remote-1")
+}
+
+func TestLoginAdmissionUsesVerifiedProviderIDWithoutChangingBridgeLoginID(t *testing.T) {
+	candidate, existing, raw := admissionFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request LoginAdmissionRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		require.Equal(t, "instagram", request.Platform)
+		require.Equal(t, "12345", request.ProviderUserID)
+		require.Equal(t, existing.ID, request.LoginID)
+		_ = json.NewEncoder(w).Encode(decisionFor(request.CandidateMXID, request.LoginID))
+	}))
+	defer server.Close()
+	candidate.Bridge.LoginAdmission = NewHTTPLoginAdmission(bridgeconfig.LoginAdmissionConfig{
+		URL: server.URL, Secret: "shard-secret", Platform: "instagram", ShardID: "0"})
+	result, err := candidate.NewLogin(context.Background(),
+		&database.UserLogin{ID: existing.ID, Metadata: map[string]any{}}, &NewLoginParams{
+			ProviderUserID: "12345", DeleteOnConflict: true,
+			LoadUserLogin: func(ctx context.Context, login *UserLogin) error {
+				login.Client = &admissionTestClient{}
+				return nil
+			},
+		})
+	require.NoError(t, err)
+	require.Same(t, existing, result)
+	var room string
+	require.NoError(t, raw.QueryRow("SELECT room_id FROM user_portal WHERE login_id='remote-1'").Scan(&room))
+	require.Equal(t, "!encrypted-history:localhost", room)
 }

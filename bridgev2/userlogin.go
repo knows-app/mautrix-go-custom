@@ -177,6 +177,10 @@ func (br *Bridge) GetCurrentBridgeStates() (states []status.BridgeState) {
 }
 
 type NewLoginParams struct {
+	// ProviderUserID is the immutable ID established by provider authentication
+	// when it differs from the bridge login ID (e.g. Instagram IGID vs FBID).
+	// Never populate this from an unverified client field.
+	ProviderUserID    string
 	LoadUserLogin     func(context.Context, *UserLogin) error
 	DeleteOnConflict  bool
 	DontReuseExisting bool
@@ -198,7 +202,11 @@ func (user *User) NewLogin(ctx context.Context, data *database.UserLogin, params
 	}
 	// Resolve before the cache lock and before mutating login metadata. The
 	// callback can take time; unrelated users must not wait on its network IO.
-	owner, admission, err := user.resolveLoginAdmission(ctx, data.ID)
+	var providerUserID string
+	if params != nil {
+		providerUserID = params.ProviderUserID
+	}
+	owner, admission, err := user.resolveLoginAdmission(ctx, data.ID, providerUserID)
 	if err != nil {
 		return nil, err
 	}
