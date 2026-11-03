@@ -66,10 +66,11 @@ func (sm *stepManager) WithNonErroringLock(fn func(*stepManager)) {
 }
 
 type ProvLogin struct {
-	ID       string
-	Process  bridgev2.LoginProcess
-	step     *stepManager
-	Override *bridgev2.UserLogin
+	Admission *bridgev2.LoginAdmissionCapture
+	ID        string
+	Process   bridgev2.LoginProcess
+	step      *stepManager
+	Override  *bridgev2.UserLogin
 
 	HTTPLock            sync.Mutex
 	fingerprint         string
@@ -106,8 +107,10 @@ func (prov *ProvisioningAPI) PostLoginStart(w http.ResponseWriter, r *http.Reque
 	ctx = user.Log.With().
 		Str("login_id", loginID).
 		Logger().WithContext(ctx)
+	ctx, admission := bridgev2.WithLoginAdmissionCapture(ctx)
 	ch := make(chan struct{})
 	provLogin := &ProvLogin{
+		Admission: admission,
 		ID:        loginID,
 		Process:   login,
 		Override:  overrideLogin,
@@ -531,6 +534,13 @@ func (prov *ProvisioningAPI) executeStep(
 		prov.deleteLogin(login, true, ErrNilStep)
 		return
 	}
+	if nextStep.Type == bridgev2.LoginStepTypeComplete && nextStep.CompleteParams != nil {
+		nextStep.CompleteParams.LoginAdmission = login.Admission.ForLogin(nextStep.CompleteParams.UserLoginID)
+		if prov.br.Bridge.Config.LoginAdmission != nil && nextStep.CompleteParams.LoginAdmission == nil {
+			prov.deleteLogin(login, true, bridgev2.ErrLoginAdmissionUnavailable)
+			return
+		}
+	}
 	nextStep.TxnID = LoginStepTxnIDPrefix + xid.New().String()
 	login.step.WithNonErroringLock(func(sm *stepManager) {
 		finishStep(sm, nextStep, login)
@@ -564,7 +574,7 @@ func (prov *ProvisioningAPI) handleCompleteStep(login *ProvLogin, step *bridgev2
 		Msg("Login completed successfully")
 	defer login.CancelCtx()
 	prov.deleteLogin(login, false, nil)
-	if login.Override == nil || login.Override.ID == step.CompleteParams.UserLoginID {
+	if step.CompleteParams.LoginAdmission != nil || login.Override == nil || login.Override.ID == step.CompleteParams.UserLoginID {
 		return
 	}
 	zerolog.Ctx(ctx).Info().
