@@ -196,6 +196,13 @@ func (user *User) NewLogin(ctx context.Context, data *database.UserLogin, params
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// Resolve before the cache lock and before mutating login metadata. The
+	// callback can take time; unrelated users must not wait on its network IO.
+	owner, admission, err := user.resolveLoginAdmission(ctx, data.ID)
+	if err != nil {
+		return nil, err
+	}
+	user = owner
 	data.BridgeID = user.BridgeID
 	data.UserMXID = user.MXID
 	if data.Metadata == nil {
@@ -219,6 +226,11 @@ func (user *User) NewLogin(ctx context.Context, data *database.UserLogin, params
 	}
 	var existingClient NetworkAPI
 	if existing != nil && existing.UserMXID != user.MXID {
+		// Managed admission must never delete an old login to resolve a
+		// disagreement. Preserve its rooms and require an explicit repair.
+		if admission != nil {
+			return nil, ErrLoginAdmissionConflict
+		}
 		if !params.DeleteOnConflict {
 			return nil, fmt.Errorf("%s is already logged in with that account", existing.UserMXID)
 		}
@@ -300,6 +312,7 @@ func (user *User) NewLogin(ctx context.Context, data *database.UserLogin, params
 			return nil, err
 		}
 	}
+	captureLoginAdmission(ctx, admission)
 	return ul, nil
 }
 
