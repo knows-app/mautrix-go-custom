@@ -124,6 +124,15 @@ func NewConnector(cfg *bridgeconfig.Config) *Connector {
 }
 
 func (br *Connector) Init(bridge *bridgev2.Bridge) {
+	if bridge.LoginAdmission == nil && br.Config.Bridge.LoginAdmission != nil {
+		cfg := *br.Config.Bridge.LoginAdmission
+		// Use the shard's existing callback identity. Do not duplicate the
+		// secret into generated configuration or a client-facing response.
+		if cfg.Secret == "" {
+			cfg.Secret = br.Config.AppService.ASToken
+		}
+		bridge.LoginAdmission = bridgev2.NewHTTPLoginAdmission(cfg)
+	}
 	br.Bridge = bridge
 	br.Log = &bridge.Log
 	br.StateStore = sqlstatestore.NewSQLStateStore(bridge.DB.Database, dbutil.ZeroLogger(br.Log.With().Str("db_section", "matrix_state").Logger()), false)
