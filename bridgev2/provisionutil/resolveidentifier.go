@@ -110,6 +110,11 @@ func ResolveIdentifier(
 			}
 		}
 		resp.Chat.Portal.CleanupOrphanedDM(ctx, login.UserMXID)
+		if createChat && resp.Chat.Portal.MXID != "" {
+			// A room deleted behind the bridge (account deletion, admin purge) would otherwise be handed
+			// back forever: messages and sends to it fail with M_NOT_FOUND.
+			resp.Chat.Portal.RecoverDeadRoom(ctx)
+		}
 		if createChat && resp.Chat.Portal.MXID == "" {
 			apiResp.JustCreated = true
 			err := resp.Chat.Portal.CreateMatrixRoom(ctx, login, resp.Chat.PortalInfo)
