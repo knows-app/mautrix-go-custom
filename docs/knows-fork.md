@@ -136,7 +136,10 @@ are set, and `owner_mxid` is on the same server as the candidate (`validLoginAdm
 Any other status, a timeout, trailing data or a failed check is `LOGIN_ADMISSION_UNAVAILABLE`.
 
 The receiver is knows-api `customer_login_api.py` (`PATH = '/internal/bridge/customer-login/admit'`); the gateway
-reads `complete.login_admission` (`bridge_gateway.py`). Which shards enable it is deployment config, not verified here.
+reads `complete.login_admission` (`bridge_gateway.py`). Which shards enable it is deployment config: knows-infra
+`hosts/bridge-shard/render.py` (`login_admission_yaml`) writes the block from the env's `login_admission.shards`, with
+`url` = the API's internal address + `/internal/bridge/customer-login/admit` and no `secret` (so the as_token is used).
+On knows-infra `develop` @ `6cd31b5` (2026-11-14) dev lists `ig01` and `fb01`; prod lists none.
 
 Errors (all `bridgev2.RespError`, written as Matrix-style `{"errcode", "error", ...}`):
 
@@ -319,8 +322,8 @@ equivalent (same token).
 
 ## Not verified
 
-- Which shards set `bridge.login_admission` in production (deployment config, knows-infra / knows-api
-  `bridge_shards.py`).
+- That the running prod and dev shards match knows-infra's `k8s/*/bridges/env.json` (read in the repo, not on the
+  cluster).
 - Whether mautrix-meta-custom `main` (pinned at `d387aadf`) starts with a `login_admission` map in its config,
   given the config-upgrade bug fixed in `1dcbc1a8`.
 - The bridge repos' `origin` refs were read as present in the local clones on 2026-11-14, not re-fetched.
