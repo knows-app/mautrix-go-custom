@@ -141,6 +141,14 @@ func (br *Connector) Init(bridge *bridgev2.Bridge) {
 			cfg.Secret = br.Config.AppService.ASToken
 		}
 		bridge.LoginAdmission = bridgev2.NewHTTPLoginAdmission(cfg)
+		log := bridge.Log.With().Str("component", "login_admission").
+			Str("platform", cfg.Platform).Str("shard_id", cfg.ShardID).Logger()
+		if err := bridgev2.CheckLoginAdmissionConfig(cfg); err != nil {
+			log.Error().Err(err).Msg("Customer login admission is misconfigured, new logins will fail")
+		} else {
+			endpoint, _ := url.Parse(cfg.URL)
+			log.Info().Str("host", endpoint.Host).Msg("Customer login admission enabled")
+		}
 	}
 	br.Bridge = bridge
 	br.Log = &bridge.Log
