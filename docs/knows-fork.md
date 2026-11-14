@@ -121,14 +121,14 @@ Callback request (bridge -> knows-api), `POST <url>`, `Authorization: Bearer <se
 
 ```json
 {"version": 1, "platform": "instagram", "shard_id": "ig01",
- "candidate_mxid": "@user_123:<server>", "login_id": "<bridge login id>", "provider_user_id": "<optional>"}
+ "candidate_mxid": "@user_<candidate id>:<server>", "login_id": "<bridge login id>", "provider_user_id": "<optional>"}
 ```
 
 Callback answer, HTTP 200, one JSON object, at most 16 KiB (`loginadmission.go:121-133`):
 
 ```json
-{"version": 1, "candidate_mxid": "@user_123:<server>", "login_id": "<same login id>",
- "owner_mxid": "@user_45:<server>", "shard_id": "ig01", "proof": "<opaque, at most 8192 chars>"}
+{"version": 1, "candidate_mxid": "@user_<candidate id>:<server>", "login_id": "<same login id>",
+ "owner_mxid": "@user_<owner id>:<server>", "shard_id": "ig01", "proof": "<opaque, at most 8192 chars>"}
 ```
 
 It is accepted only when `version` is 1, `candidate_mxid` and `login_id` echo the request, `shard_id` and `proof`
