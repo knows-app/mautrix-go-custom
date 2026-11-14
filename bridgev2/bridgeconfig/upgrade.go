@@ -11,6 +11,7 @@ import (
 
 	up "go.mau.fi/util/configupgrade"
 	"go.mau.fi/util/random"
+	"gopkg.in/yaml.v3"
 
 	"maunium.net/go/mautrix/federation"
 )
@@ -24,7 +25,7 @@ func doUpgrade(helper up.Helper) {
 		return
 	}
 
-	helper.Copy(up.Map|up.Null, "bridge", "login_admission")
+	copyNullableMap(helper, "bridge", "login_admission")
 	helper.Copy(up.Str, "bridge", "command_prefix")
 	helper.Copy(up.Bool, "bridge", "personal_filtering_spaces")
 	helper.Copy(up.Bool, "bridge", "private_chat_portal_meta")
@@ -239,6 +240,27 @@ var SpacedBlocks = [][]string{
 	{"encryption"},
 	{"env_config_prefix"},
 	{"logging"},
+}
+
+// copyNullableMap copies a map option whose example value is null.
+//
+// configupgrade's Copy keeps the base node's kind: onto a `null` scalar it only
+// rewrites the tag and drops the map's content, which saves `key: !!map` and
+// then fails to parse ("cannot unmarshal !!map into ..."). A map in the user's
+// config therefore replaces the base node whole; anything else keeps Copy's
+// behaviour (null stays null, a wrong type is ignored).
+func copyNullableMap(helper up.Helper, path ...string) {
+	cfg := helper.GetNode(path...)
+	base := helper.GetBaseNode(path...)
+	if cfg == nil || base == nil || cfg.Kind != yaml.MappingNode {
+		helper.Copy(up.Map|up.Null, path...)
+		return
+	}
+	base.Kind = yaml.MappingNode
+	base.Tag = cfg.Tag
+	base.Style = cfg.Style
+	base.Value = ""
+	base.Content = cfg.Content
 }
 
 // Upgrader is a config upgrader that copies the default fields in the homeserver, appservice and logging blocks.
