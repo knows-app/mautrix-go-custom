@@ -232,3 +232,31 @@ func TestLoginAdmissionUsesVerifiedProviderIDWithoutChangingBridgeLoginID(t *tes
 	require.NoError(t, raw.QueryRow("SELECT room_id FROM user_portal WHERE login_id='remote-1'").Scan(&room))
 	require.Equal(t, "!encrypted-history:localhost", room)
 }
+
+func TestCheckLoginAdmissionConfig(t *testing.T) {
+	valid := bridgeconfig.LoginAdmissionConfig{
+		URL: "http://callbacks.svc.cluster.local:8080/internal/bridge/customer-login/admit", Secret: "s",
+		Platform: "instagram", ShardID: "ig01", AllowInsecureHTTP: true,
+	}
+	require.NoError(t, CheckLoginAdmissionConfig(valid))
+	https := valid
+	https.URL, https.AllowInsecureHTTP = "https://cb.example/admit", false
+	require.NoError(t, CheckLoginAdmissionConfig(https))
+	loopback := valid
+	loopback.URL, loopback.AllowInsecureHTTP = "http://127.0.0.1:8080/admit", false
+	require.NoError(t, CheckLoginAdmissionConfig(loopback))
+
+	for name, mutate := range map[string]func(*bridgeconfig.LoginAdmissionConfig){
+		"plain http":  func(c *bridgeconfig.LoginAdmissionConfig) { c.AllowInsecureHTTP = false },
+		"relative":    func(c *bridgeconfig.LoginAdmissionConfig) { c.URL = "/admit" },
+		"query":       func(c *bridgeconfig.LoginAdmissionConfig) { c.URL += "?x=1" },
+		"credentials": func(c *bridgeconfig.LoginAdmissionConfig) { c.URL = "https://u:p@cb.example/admit" },
+		"no secret":   func(c *bridgeconfig.LoginAdmissionConfig) { c.Secret = "" },
+		"no platform": func(c *bridgeconfig.LoginAdmissionConfig) { c.Platform = "" },
+		"no shard":    func(c *bridgeconfig.LoginAdmissionConfig) { c.ShardID = "" },
+	} {
+		cfg := valid
+		mutate(&cfg)
+		require.Error(t, CheckLoginAdmissionConfig(cfg), name)
+	}
+}

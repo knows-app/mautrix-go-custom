@@ -75,15 +75,32 @@ func NewHTTPLoginAdmission(config bridgeconfig.LoginAdmissionConfig) *httpLoginA
 	}}
 }
 
-func (resolver *httpLoginAdmission) ResolveLogin(ctx context.Context, candidate id.UserID, loginID networkid.UserLoginID, providerUserID string) (*LoginAdmission, error) {
-	cfg := resolver.config
+// CheckLoginAdmissionConfig reports why a login admission config cannot be
+// used. A config that fails this check makes every new login fail closed.
+func CheckLoginAdmissionConfig(cfg bridgeconfig.LoginAdmissionConfig) error {
 	endpoint, err := url.Parse(cfg.URL)
-	if err != nil || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" ||
-		cfg.Secret == "" || cfg.Platform == "" || cfg.ShardID == "" || loginID == "" {
-		return nil, ErrLoginAdmissionUnavailable
+	switch {
+	case err != nil || endpoint.Host == "":
+		return errors.New("url must be an absolute URL")
+	case endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "":
+		return errors.New("url must not carry credentials, a query or a fragment")
+	case cfg.Secret == "":
+		return errors.New("no secret (and no appservice as_token to default to)")
+	case cfg.Platform == "":
+		return errors.New("platform is empty")
+	case cfg.ShardID == "":
+		return errors.New("shard_id is empty")
 	}
 	host := net.ParseIP(endpoint.Hostname())
 	if endpoint.Scheme != "https" && !(endpoint.Scheme == "http" && (cfg.AllowInsecureHTTP || endpoint.Hostname() == "localhost" || host != nil && host.IsLoopback())) {
+		return errors.New("url must be https, loopback http, or http with allow_insecure_http")
+	}
+	return nil
+}
+
+func (resolver *httpLoginAdmission) ResolveLogin(ctx context.Context, candidate id.UserID, loginID networkid.UserLoginID, providerUserID string) (*LoginAdmission, error) {
+	cfg := resolver.config
+	if loginID == "" || CheckLoginAdmissionConfig(cfg) != nil {
 		return nil, ErrLoginAdmissionUnavailable
 	}
 	body, err := json.Marshal(LoginAdmissionRequest{1, cfg.Platform, cfg.ShardID, candidate, loginID, providerUserID})
