@@ -194,7 +194,9 @@ func (portal *Portal) doBackwardsBackfill(ctx context.Context, source *UserLogin
 		}
 		return false, nil
 	}
-	resp.Messages = portal.cutoffMessages(ctx, resp.Messages, resp.AggressiveDeduplication, false, firstMessage)
+	// Knows: a KnowsFillGap batch skips the time cutoff and is deduplicated by ID only.
+	cutoffAnchor, aggressiveDedup := knowsCutoff(resp, firstMessage)
+	resp.Messages = portal.cutoffMessages(ctx, resp.Messages, aggressiveDedup, false, cutoffAnchor)
 	if len(resp.Messages) == 0 {
 		if resp.CompleteCallback != nil {
 			resp.CompleteCallback()
@@ -267,6 +269,15 @@ func (portal *Portal) doThreadBackfill(ctx context.Context, source *UserLogin, t
 		return portal.sendBackfill(ctx, source, resp.Messages, true, resp.MarkRead, true, resp.CompleteCallback)
 	}
 	return nil
+}
+
+// Knows: knowsCutoff returns the anchor message and dedup mode for the backward cutoff.
+// A KnowsFillGap batch has no anchor (nothing is cut by time) and is always deduplicated by ID.
+func knowsCutoff(resp *FetchMessagesResponse, first *database.Message) (anchor *database.Message, aggressive bool) {
+	if resp.KnowsFillGap {
+		return nil, true
+	}
+	return first, resp.AggressiveDeduplication
 }
 
 func (portal *Portal) cutoffMessages(ctx context.Context, messages []*BackfillMessage, aggressiveDedup, forward bool, lastMessage *database.Message) []*BackfillMessage {
