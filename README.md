@@ -1,7 +1,7 @@
 # mautrix-go
 
 > **Knows fork** (`knows-app/mautrix-go-custom`). `main` mirrors upstream; the Knows changes live on
-> `knows/<upstream tag>` branches. What the fork adds, which bridge uses which commit, and the provisioning and
+> `knows/<upstream version>` branches. What the fork adds, which bridge uses which commit, and the provisioning and
 > native-login contract: [docs/knows-fork.md](docs/knows-fork.md).
 
 [![GoDoc](https://pkg.go.dev/badge/maunium.net/go/mautrix)](https://pkg.go.dev/maunium.net/go/mautrix)
