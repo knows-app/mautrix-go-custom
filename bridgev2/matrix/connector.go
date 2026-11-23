@@ -133,6 +133,23 @@ func NewConnector(cfg *bridgeconfig.Config) *Connector {
 }
 
 func (br *Connector) Init(bridge *bridgev2.Bridge) {
+	if bridge.LoginAdmission == nil && br.Config.Bridge.LoginAdmission != nil {
+		cfg := *br.Config.Bridge.LoginAdmission
+		// Use the shard's existing callback identity. Do not duplicate the
+		// secret into generated configuration or a client-facing response.
+		if cfg.Secret == "" {
+			cfg.Secret = br.Config.AppService.ASToken
+		}
+		bridge.LoginAdmission = bridgev2.NewHTTPLoginAdmission(cfg)
+		log := bridge.Log.With().Str("component", "login_admission").
+			Str("platform", cfg.Platform).Str("shard_id", cfg.ShardID).Logger()
+		if err := bridgev2.CheckLoginAdmissionConfig(cfg); err != nil {
+			log.Error().Err(err).Msg("Customer login admission is misconfigured, new logins will fail")
+		} else {
+			endpoint, _ := url.Parse(cfg.URL)
+			log.Info().Str("host", endpoint.Host).Msg("Customer login admission enabled")
+		}
+	}
 	br.Bridge = bridge
 	br.Log = &bridge.Log
 	br.StateStore = sqlstatestore.NewSQLStateStore(bridge.DB.Database, dbutil.ZeroLogger(br.Log.With().Str("db_section", "matrix_state").Logger()), false)

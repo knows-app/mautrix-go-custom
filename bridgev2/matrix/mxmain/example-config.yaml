@@ -1,5 +1,10 @@
 # Config options that affect the central bridge module.
 bridge:
+    # Optional owner resolver called after provider authentication, before NewLogin.
+    # Configure url (HTTPS, or loopback HTTP), platform and shard_id.
+    # Authentication defaults to appservice.as_token; an explicit secret is optional.
+    # Existing owners and shard pins are retained. Failures never delete a login.
+    login_admission: null
     # The prefix for commands. Only required in non-management rooms.
     command_prefix: '$<<or .DefaultCommandPrefix (printf "!%s" .NetworkID)>>'
     # Should the bridge create a space for each login containing the rooms that account is in?
