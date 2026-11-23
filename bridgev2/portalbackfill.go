@@ -201,6 +201,10 @@ func (portal *Portal) doBackwardsBackfill(ctx context.Context, source *UserLogin
 		if resp.CompleteCallback != nil {
 			resp.CompleteCallback()
 		}
+		// Knows: a fully deduplicated gap-fill batch (nothing new) is not an error.
+		if resp.KnowsFillGap {
+			return false, nil
+		}
 		// Hack to handle some migrated portals where message timestamps are unknown.
 		// They can't be backfilled further, so just mark them as done.
 		if firstMessage != nil && firstMessage.Timestamp.Unix() == 0 {
@@ -273,6 +277,7 @@ func (portal *Portal) doThreadBackfill(ctx context.Context, source *UserLogin, t
 
 // Knows: knowsCutoff returns the anchor message and dedup mode for the backward cutoff.
 // A KnowsFillGap batch has no anchor (nothing is cut by time) and is always deduplicated by ID.
+// A nil anchor is always returned with aggressive=true: cutoffMessages relies on it (it dereferences the anchor otherwise).
 func knowsCutoff(resp *FetchMessagesResponse, first *database.Message) (anchor *database.Message, aggressive bool) {
 	if resp.KnowsFillGap {
 		return nil, true

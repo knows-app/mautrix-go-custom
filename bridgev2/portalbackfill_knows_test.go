@@ -77,3 +77,47 @@ func TestKnowsFillGapKeepsNewerMessagesAndDropsKnownIDs(t *testing.T) {
 	require.Equal(t, []string{"m1", "m2", "m4"}, run(&FetchMessagesResponse{KnowsFillGap: true}))
 	require.Equal(t, []string{"m1"}, run(&FetchMessagesResponse{}))
 }
+
+type knowsFakeBackfiller struct{ BackfillingNetworkAPI }
+
+func TestKnowsFillGapWithNothingNewIsNotAnError(t *testing.T) {
+	ctx := zerolog.Nop().WithContext(context.Background())
+	raw, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = raw.Close() })
+	db, err := dbutil.NewWithDB(raw, "sqlite3")
+	require.NoError(t, err)
+	bdb := database.New("test", database.MetaTypes{}, db)
+	require.NoError(t, bdb.Upgrade(ctx))
+	key := networkid.PortalKey{ID: "thread-1", Receiver: "login-1"}
+	_, err = raw.Exec(`INSERT INTO portal (bridge_id, id, receiver, mxid, other_user_id, name, topic, avatar_id, avatar_hash, avatar_mxc,
+		name_set, avatar_set, topic_set, name_is_custom, in_space, room_type, metadata)
+		VALUES ('test', 'thread-1', 'login-1', '!room:localhost', '', '', '', '', '', '', false, false, false, false, false, '', '{}')`)
+	require.NoError(t, err)
+	_, err = raw.Exec(`INSERT INTO message (bridge_id, id, part_id, mxid, room_id, room_receiver, sender_id, sender_mxid, timestamp, edit_count, metadata)
+		VALUES ('test', 'm1', '', '$m1:localhost', 'thread-1', 'login-1', 'u', '', 1000000000, 0, '{}')`)
+	require.NoError(t, err)
+	br := &Bridge{ID: "test", DB: bdb, Config: &bridgeconfig.BridgeConfig{},
+		portalsByKey: map[networkid.PortalKey]*Portal{}, portalsByMXID: map[id.RoomID]*Portal{}}
+	dbPortal, err := bdb.Portal.GetByKey(ctx, key)
+	require.NoError(t, err)
+	portal := &Portal{Portal: dbPortal, Bridge: br, Log: zerolog.Nop(), RoomCreated: exsync.NewEvent()}
+	source := &UserLogin{Client: knowsFakeBackfiller{}}
+
+	newResp := func(gap bool, called *bool) *FetchMessagesResponse {
+		return &FetchMessagesResponse{
+			KnowsFillGap:     gap,
+			Messages:         []*BackfillMessage{{ID: "m1", Timestamp: time.Unix(0, 2000*int64(time.Millisecond))}},
+			CompleteCallback: func() { *called = true },
+		}
+	}
+	var called bool
+	more, err := portal.doBackwardsBackfill(ctx, source, &database.BackfillTask{}, newResp(true, &called))
+	require.NoError(t, err)
+	require.False(t, more)
+	require.True(t, called, "the complete callback still runs")
+
+	_, err = portal.doBackwardsBackfill(ctx, source, &database.BackfillTask{}, newResp(false, &called))
+	require.ErrorIs(t, err, errNoMessagesLeftAfterCutoff, "default behaviour is unchanged")
+}
