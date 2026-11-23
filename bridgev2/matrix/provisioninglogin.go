@@ -104,6 +104,7 @@ func (prov *ProvisioningAPI) PostLoginStart(w http.ResponseWriter, r *http.Reque
 	login, err := prov.net.CreateLogin(r.Context(), user, r.PathValue("flowID"))
 	if err != nil {
 		zerolog.Ctx(r.Context()).Err(err).Msg("Failed to create login process")
+		bridgev2.ReportLoginStepFailure(r.Context(), "create", err)
 		RespondWithError(w, err, "Internal error creating login process")
 		return
 	}
@@ -161,6 +162,7 @@ func (prov *ProvisioningAPI) PostLoginStart(w http.ResponseWriter, r *http.Reque
 	firstStep, err := provLogin.step.GetNext()
 	if err != nil {
 		zerolog.Ctx(r.Context()).Err(err).Msg("Failed to start login")
+		bridgev2.ReportLoginStepFailure(r.Context(), "start", err)
 		RespondWithError(w, err, "Internal error starting login")
 		return
 	}
@@ -217,6 +219,7 @@ func (prov *ProvisioningAPI) PostLoginStep(w http.ResponseWriter, r *http.Reques
 	resp, err := prov.doLoginStep(r.Context(), login, stepType, stepID, txnID, params, rawParams)
 	if err != nil {
 		zerolog.Ctx(r.Context()).Err(err).Msg("Failed to complete login step")
+		bridgev2.ReportLoginStepFailure(r.Context(), string(stepType), err)
 		RespondWithError(w, err, "Internal error in login step")
 	} else {
 		exhttp.WriteJSONResponse(w, http.StatusOK, &RespSubmitLogin{LoginID: login.ID, LoginStep: resp})

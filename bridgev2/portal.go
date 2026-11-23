@@ -636,6 +636,9 @@ func (portal *Portal) handleSingleEvent(ctx context.Context, rawEvt any, doneCal
 		}
 	case *portalRemoteEvent:
 		res = portal.handleRemoteEvent(ctx, evt.source, evt.evtType, evt.evt)
+		if portal.backgroundCtx.Err() == nil {
+			reportReceiveFailure(ctx, evt.evtType, res)
+		}
 	case *portalCreateEvent:
 		err := portal.createMatrixRoomInLoop(evt.ctx, evt.source, evt.info, nil)
 		res.Success = err == nil
@@ -778,6 +781,7 @@ func (portal *Portal) sendErrorStatus(ctx context.Context, evt *event.Event, err
 	if status.InternalError == nil {
 		status.InternalError = err
 	}
+	reportSendFailure(ctx, evt, err, &status)
 	portal.Bridge.Matrix.SendMessageStatus(ctx, &status, StatusEventInfoFromEvent(evt))
 }
 

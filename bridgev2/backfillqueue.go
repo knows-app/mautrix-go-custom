@@ -201,6 +201,7 @@ func (mt *ManualBackfill) Do(ctx context.Context) {
 		log.Debug().Msg("Backfill task changed before dispatch")
 	} else if completed, err = mt.Portal.doBackfillTask(ctx, mt.Source, task, mt.Data); err != nil {
 		log.Err(err).Msg("Failed to do backwards backfill from event")
+		reportBackfillFailure(ctx, "manual_task", err)
 		updateTask = errors.Is(err, errNoMessagesLeftAfterCutoff)
 		completed = true
 	} else {
@@ -241,6 +242,7 @@ func (br *Bridge) DoBackfillTask(ctx context.Context, task *database.BackfillTas
 	completed, err := br.getPortalAndDoBackfillTask(ctx, task)
 	if err != nil {
 		log.Err(err).Msg("Failed to do backfill task")
+		reportBackfillFailure(ctx, "queue_task", err)
 		updateTask = errors.Is(err, errNoMessagesLeftAfterCutoff)
 		time.Sleep(BackfillQueueErrorBackoff)
 	} else if completed {
