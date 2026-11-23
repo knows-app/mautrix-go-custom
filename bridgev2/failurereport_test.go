@@ -214,7 +214,7 @@ func TestLoginStepFailureReports(t *testing.T) {
 	rec := recordFailures(t)
 	ReportLoginStepFailure(rec.ctx(), "user_input", RespError{ErrCode: "FI.MAU.META.WRONG_PASSWORD", Err: secretUser, StatusCode: http.StatusForbidden})
 	ReportLoginStepFailure(rec.ctx(), "start", errors.New(secretToken))
-	ReportLoginStepFailure(rec.ctx(), "create", ErrLoginAdmissionUnavailable)
+	ReportLoginStepFailure(rec.ctx(), "create", RespError{ErrCode: "FI.MAU.BRIDGE.LOGIN_ADMISSION_UNAVAILABLE", Err: secretToken, StatusCode: http.StatusServiceUnavailable})
 	require.Len(t, rec.got, 3)
 	require.Equal(t, map[string]string{"step": "user_input", "errcode": "FI.MAU.META.WRONG_PASSWORD", "status": "403"}, rec.got[0].attrs)
 	require.True(t, rec.got[0].warning, "a 4xx is the expected answer to the user's input")
