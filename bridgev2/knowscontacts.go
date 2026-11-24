@@ -32,7 +32,10 @@ type KnowsContactListReadyNetworkAPI interface {
 }
 
 // KnowsContactListState is embedded by a connector's client to implement
-// KnowsContactListReadyNetworkAPI. The zero value is ready to use.
+// KnowsContactListReadyNetworkAPI. The zero value is ready to use. The state
+// lives with the client: a connector must call Staged after every start of
+// the client (restart, reconnect with a new client), also when the list comes
+// from its own store, or each wait_ms request waits for the full cap.
 type KnowsContactListState struct {
 	once     sync.Once
 	ready    chan struct{}
