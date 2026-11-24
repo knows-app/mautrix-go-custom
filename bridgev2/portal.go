@@ -640,7 +640,9 @@ func (portal *Portal) handleSingleEvent(ctx context.Context, rawEvt any, doneCal
 			reportReceiveFailure(ctx, evt.evtType, res)
 		}
 	case *portalCreateEvent:
-		err := portal.createMatrixRoomInLoop(evt.ctx, evt.source, evt.info, nil)
+		// Knows: a waiting caller may be answered early (first batch), so only the first answer counts.
+		evt.cb = knowsOnce(evt.cb)
+		err := portal.createMatrixRoomInLoop(knowsWithRoomReady(evt.ctx, evt.cb), evt.source, evt.info, nil)
 		res.Success = err == nil
 		evt.cb(err)
 	default:
@@ -5783,6 +5785,9 @@ func (portal *Portal) createMatrixRoomInLoop(ctx context.Context, source *UserLo
 		log.Err(err).Msg("Failed to save portal to database after creating Matrix room")
 		return err
 	}
+	if portal.RoomType != database.RoomTypeSpace {
+		portal.Bridge.KnowsCallbacks.PortalReady(source.ID, portal.ID, roomID, false)
+	}
 	if info.CanBackfill && portal.RoomType != database.RoomTypeSpace {
 		err = portal.Bridge.DB.BackfillTask.Upsert(ctx, &database.BackfillTask{
 			PortalKey:         portal.PortalKey,
@@ -5825,7 +5830,10 @@ func (portal *Portal) createMatrixRoomInLoop(ctx context.Context, source *UserLo
 		portal.Bridge.Config.Backfill.Enabled &&
 		portal.RoomType != database.RoomTypeSpace &&
 		!portal.Bridge.Background {
-		portal.doForwardBackfill(ctx, source, nil, backfillBundle)
+		portal.knowsCreateForwardBackfill(ctx, source, backfillBundle)
+	} else {
+		portal.knowsFirstBatchWritten(source)
+		knowsFirstBatchFromContext(ctx).done()
 	}
 	return nil
 }

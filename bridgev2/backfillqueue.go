@@ -24,6 +24,31 @@ const BackfillMinBackoffAfterRoomCreate = 1 * time.Minute
 const BackfillQueueErrorBackoff = 1 * time.Minute
 const BackfillQueueMaxEmptyBackoff = 10 * time.Minute
 
+// KnowsBackfillQueueIdleBackoffEnv turns on the Knows idle wait of the backfill
+// queue ("1"). Unset, an empty queue is read again every batch_delay, as upstream.
+const KnowsBackfillQueueIdleBackoffEnv = "KNOWS_BACKFILL_QUEUE_IDLE_BACKOFF"
+
+// KnowsBackfillQueueMaxIdleWait caps the wait of an empty queue with
+// KNOWS_BACKFILL_QUEUE_IDLE_BACKOFF: a task written without WakeupBackfillQueue
+// is picked up within this delay.
+var KnowsBackfillQueueMaxIdleWait = 1 * time.Minute
+
+// knowsBackfillQueueDelay is the wait before the queue looks for a task again,
+// with KNOWS_BACKFILL_QUEUE_IDLE_BACKOFF. After emptyCount polls in a row found
+// nothing, it grows by batchDelay each time up to KnowsBackfillQueueMaxIdleWait,
+// but never past the moment the next task becomes due (nextDue, zero if none),
+// and never below batchDelay. WakeupBackfillQueue ends the wait at once.
+func knowsBackfillQueueDelay(batchDelay time.Duration, emptyCount int, nextDue, now time.Time) time.Duration {
+	if emptyCount <= 0 {
+		return batchDelay
+	}
+	delay := min(batchDelay+batchDelay*time.Duration(emptyCount), KnowsBackfillQueueMaxIdleWait)
+	if !nextDue.IsZero() {
+		delay = min(delay, nextDue.Sub(now))
+	}
+	return max(delay, batchDelay)
+}
+
 func (br *Bridge) WakeupBackfillQueue(manualTask ...*ManualBackfill) {
 	if br.IsStopping() {
 		for _, task := range manualTask {
@@ -91,11 +116,15 @@ func (br *Bridge) RunBackfillQueue() {
 		cancel()
 	}()
 	batchDelay := time.Duration(br.Config.Backfill.Queue.BatchDelay) * time.Second
-	log.Info().Stringer("batch_delay", batchDelay).Msg("Backfill queue starting")
+	knowsIdleBackoff := KnowsFlag(KnowsBackfillQueueIdleBackoffEnv)
+	log.Info().Stringer("batch_delay", batchDelay).Bool("knows_idle_backoff", knowsIdleBackoff).Msg("Backfill queue starting")
 	noTasksFoundCount := 0
+	var knowsNextDue time.Time
 	for {
 		nextDelay := batchDelay
-		if noTasksFoundCount > 0 {
+		if knowsIdleBackoff {
+			nextDelay = knowsBackfillQueueDelay(batchDelay, noTasksFoundCount, knowsNextDue, time.Now())
+		} else if noTasksFoundCount > 0 {
 			extraDelay := batchDelay * time.Duration(noTasksFoundCount)
 			nextDelay += min(BackfillQueueMaxEmptyBackoff, extraDelay)
 		}
@@ -121,6 +150,14 @@ func (br *Bridge) RunBackfillQueue() {
 				backfillTask.FromQueue = true
 				br.DoBackfillTask(ctx, backfillTask)
 				noTasksFoundCount = 0
+			} else if knowsIdleBackoff {
+				// Knows: an empty queue waits for its next due task or a wakeup instead of reading
+				// the table again every batch_delay.
+				noTasksFoundCount++
+				knowsNextDue, err = br.DB.BackfillTask.GetNextDispatchMinTS(ctx)
+				if err != nil {
+					log.Err(err).Msg("Failed to get next backfill queue due time")
+				}
 			}
 		}
 	}

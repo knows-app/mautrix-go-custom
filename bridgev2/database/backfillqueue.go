@@ -106,6 +106,12 @@ const (
 		FROM backfill_task
 		WHERE bridge_id = $1 AND portal_id = $2 AND portal_receiver = $3
 	`
+	getNextDispatchMinTSQuery = `
+		SELECT COALESCE(MIN(next_dispatch_min_ts), 0)
+		FROM backfill_task
+		WHERE bridge_id = $1 AND is_done = false AND queue_done = false AND user_login_id <> ''
+			AND next_dispatch_min_ts < $2
+	`
 	deleteBackfillQueueQuery = `
 		DELETE FROM backfill_task
 		WHERE bridge_id = $1 AND portal_id = $2 AND portal_receiver = $3
@@ -167,6 +173,18 @@ func (btq *BackfillTaskQuery) GetNextForPortal(ctx context.Context, portalKey ne
 		return nil, nil
 	}
 	return task, nil
+}
+
+// GetNextDispatchMinTS returns when the next queue task becomes due (Knows), or
+// the zero time when no task is waiting. Tasks that will never be dispatched
+// (BackfillNextDispatchNever) are left out.
+func (btq *BackfillTaskQuery) GetNextDispatchMinTS(ctx context.Context) (time.Time, error) {
+	var ts int64
+	err := btq.GetDB().QueryRow(ctx, getNextDispatchMinTSQuery, btq.BridgeID, BackfillNextDispatchNever.UnixNano()).Scan(&ts)
+	if err != nil || ts == 0 {
+		return time.Time{}, err
+	}
+	return time.Unix(0, ts), nil
 }
 
 func (btq *BackfillTaskQuery) Delete(ctx context.Context, portalKey networkid.PortalKey) error {

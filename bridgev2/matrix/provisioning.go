@@ -513,7 +513,7 @@ func (prov *ProvisioningAPI) doResolveIdentifier(w http.ResponseWriter, r *http.
 	if login == nil {
 		return
 	}
-	resp, err := provisionutil.ResolveIdentifier(r.Context(), login, r.PathValue("identifier"), createChat)
+	resp, err := provisionutil.ResolveIdentifier(knowsResolveContext(r, createChat), login, r.PathValue("identifier"), createChat)
 	if err != nil {
 		RespondWithError(w, err, "Internal error resolving identifier")
 	} else if resp == nil {
@@ -525,6 +525,16 @@ func (prov *ProvisioningAPI) doResolveIdentifier(w http.ResponseWriter, r *http.
 		}
 		exhttp.WriteJSONResponse(w, status, resp)
 	}
+}
+
+// knowsResolveContext is the context of a resolve_identifier / create_dm request:
+// create_dm?first_batch=1 (Knows, opt-in by the caller) answers at the first batch
+// of history instead of at the end of the initial backfill.
+func knowsResolveContext(r *http.Request, createChat bool) context.Context {
+	if createChat && r.URL.Query().Get("first_batch") == "1" {
+		return bridgev2.WithKnowsFirstBatch(r.Context(), nil)
+	}
+	return r.Context()
 }
 
 func (prov *ProvisioningAPI) GetContactList(w http.ResponseWriter, r *http.Request) {

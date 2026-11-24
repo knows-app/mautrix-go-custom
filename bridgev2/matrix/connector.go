@@ -150,6 +150,9 @@ func (br *Connector) Init(bridge *bridgev2.Bridge) {
 			log.Info().Str("host", endpoint.Host).Msg("Customer login admission enabled")
 		}
 	}
+	if bridge.KnowsCallbacks == nil {
+		bridge.KnowsCallbacks = bridgev2.NewKnowsCallbacks(br.Config.Homeserver.StatusEndpoint, br.Config.AppService.ASToken, bridge.Log)
+	}
 	br.Bridge = bridge
 	br.Log = &bridge.Log
 	br.StateStore = sqlstatestore.NewSQLStateStore(bridge.DB.Database, dbutil.ZeroLogger(br.Log.With().Str("db_section", "matrix_state").Logger()), false)

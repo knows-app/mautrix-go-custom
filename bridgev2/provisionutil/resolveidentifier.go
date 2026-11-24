@@ -25,6 +25,10 @@ type RespResolveIdentifier struct {
 	Identifiers []string            `json:"identifiers,omitempty"`
 	MXID        id.UserID           `json:"mxid,omitempty"`
 	DMRoomID    id.RoomID           `json:"dm_room_mxid,omitempty"`
+	// Knows: true when the room was created by this call with a bridgev2.WithKnowsFirstBatch context
+	// (create_dm?first_batch=1) and the answer came before the whole initial history was written:
+	// older messages are still being backfilled into the room.
+	KnowsFirstBatch bool `json:"knows_first_batch,omitempty"`
 
 	Portal      *bridgev2.Portal `json:"-"`
 	Ghost       *bridgev2.Ghost  `json:"-"`
@@ -125,6 +129,7 @@ func ResolveIdentifier(
 				zerolog.Ctx(ctx).Err(err).Msg("Failed to create portal room")
 				return nil, bridgev2.RespError(mautrix.MUnknown.WithMessage("Failed to create portal room"))
 			}
+			apiResp.KnowsFirstBatch = bridgev2.KnowsAnsweredAtFirstBatch(ctx)
 		}
 		apiResp.Portal = resp.Chat.Portal
 		apiResp.DMRoomID = resp.Chat.Portal.MXID
