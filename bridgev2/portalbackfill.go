@@ -180,9 +180,13 @@ func (portal *Portal) doBackwardsBackfill(ctx context.Context, source *UserLogin
 		Bool("has_more", resp.HasMore).
 		Int("message_count", len(resp.Messages)).
 		Msg("Fetched messages for backward backfill")
-	task.Cursor = resp.Cursor
-	task.IsDone = !resp.HasMore
-	task.QueueDone = task.IsDone
+	// Knows: a KnowsFillGap batch fills a gap above the first message and is not a page of the
+	// portal's backward backfill, so it leaves the task's cursor and done flags as they were.
+	if !resp.KnowsFillGap {
+		task.Cursor = resp.Cursor
+		task.IsDone = !resp.HasMore
+		task.QueueDone = task.IsDone
+	}
 	if len(resp.Messages) == 0 {
 		if !resp.HasMore {
 			log.Debug().Msg("No messages to backfill, marking backfill task as done")
@@ -218,7 +222,8 @@ func (portal *Portal) doBackwardsBackfill(ctx context.Context, source *UserLogin
 	if err != nil {
 		return false, fmt.Errorf("failed to send backward backfill: %w", err)
 	}
-	if len(resp.Messages) > 0 {
+	// Knows: a gap-fill batch is not older than the task's oldest message.
+	if len(resp.Messages) > 0 && !resp.KnowsFillGap {
 		task.OldestMessageID = resp.Messages[0].ID
 	}
 	return false, nil

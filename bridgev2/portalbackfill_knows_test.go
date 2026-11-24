@@ -120,4 +120,24 @@ func TestKnowsFillGapWithNothingNewIsNotAnError(t *testing.T) {
 
 	_, err = portal.doBackwardsBackfill(ctx, source, &database.BackfillTask{}, newResp(false, &called))
 	require.ErrorIs(t, err, errNoMessagesLeftAfterCutoff, "default behaviour is unchanged")
+
+	// Knows: a gap-fill batch never moves the portal's real backfill task.
+	br.Config.Backfill.Queue.MaxBatches = -1
+	task := &database.BackfillTask{Cursor: "c0", OldestMessageID: "old", BatchCount: 3}
+	gap := newResp(true, &called)
+	gap.Cursor, gap.HasMore = "c1", false
+	_, err = portal.doBackfillTask(ctx, source, task, gap)
+	require.NoError(t, err)
+	require.Equal(t, networkid.PaginationCursor("c0"), task.Cursor)
+	require.Equal(t, networkid.MessageID("old"), task.OldestMessageID)
+	require.Equal(t, 3, task.BatchCount)
+	require.False(t, task.IsDone)
+	require.False(t, task.QueueDone)
+
+	plain := &database.BackfillTask{Cursor: "c0", OldestMessageID: "old", BatchCount: 3}
+	normal := newResp(false, &called)
+	normal.Cursor, normal.HasMore = "c1", false
+	_, _ = portal.doBackfillTask(ctx, source, plain, normal)
+	require.Equal(t, networkid.PaginationCursor("c1"), plain.Cursor, "a normal batch still moves the task")
+	require.True(t, plain.IsDone)
 }
