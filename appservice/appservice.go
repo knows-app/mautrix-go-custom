@@ -176,6 +176,9 @@ type AppService struct {
 
 	Live  bool
 	Ready bool
+	// Knows: the bridge's existing logins, for GET /_matrix/mau/ready?logins=1.
+	// Ready stays the plain readiness; KnowsLogins is only read when asked for.
+	KnowsLogins KnowsLoginsReadiness
 
 	clients     map[id.UserID]*mautrix.Client
 	intents     map[id.UserID]*IntentAPI

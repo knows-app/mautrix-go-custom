@@ -113,6 +113,7 @@ var (
 	_ bridgev2.MatrixConnectorWithURLPreviews            = (*Connector)(nil)
 	_ bridgev2.MatrixConnectorWithAnalytics              = (*Connector)(nil)
 	_ bridgev2.MatrixConnectorWithEventSizeLimit         = (*Connector)(nil)
+	_ bridgev2.MatrixConnectorWithKnowsLoginsReady       = (*Connector)(nil)
 )
 
 func NewConnector(cfg *bridgeconfig.Config) *Connector {
@@ -313,6 +314,14 @@ func (br *Connector) ResyncEncryptionState(ctx context.Context) {
 		Int("forbidden_count", forbiddenCount).
 		Int("failed_count", failedCount).
 		Msg("Resynced rooms")
+}
+
+// KnowsSetLoginsReady records the startup of the existing logins for
+// GET /_matrix/mau/ready?logins=1.
+func (br *Connector) KnowsSetLoginsReady(started, total int, ready bool) {
+	if br.AS != nil {
+		br.AS.KnowsLogins.Set(started, total, ready)
+	}
 }
 
 func (br *Connector) GetPublicAddress() string {
