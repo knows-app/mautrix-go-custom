@@ -1,0 +1,143 @@
+package bridgev2
+
+import (
+	"context"
+	"database/sql"
+	"testing"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/require"
+	"go.mau.fi/util/dbutil"
+	"go.mau.fi/util/exsync"
+
+	"maunium.net/go/mautrix/bridgev2/bridgeconfig"
+	"maunium.net/go/mautrix/bridgev2/database"
+	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/id"
+)
+
+func TestKnowsFillGapKeepsNewerMessagesAndDropsKnownIDs(t *testing.T) {
+	ctx := zerolog.Nop().WithContext(context.Background())
+	raw, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = raw.Close() })
+	db, err := dbutil.NewWithDB(raw, "sqlite3")
+	require.NoError(t, err)
+	bdb := database.New("test", database.MetaTypes{}, db)
+	require.NoError(t, bdb.Upgrade(ctx))
+
+	key := networkid.PortalKey{ID: "thread-1", Receiver: "login-1"}
+	_, err = raw.Exec(`INSERT INTO portal (bridge_id, id, receiver, mxid, other_user_id, name, topic, avatar_id, avatar_hash, avatar_mxc,
+		name_set, avatar_set, topic_set, name_is_custom, in_space, room_type, metadata)
+		VALUES ('test', 'thread-1', 'login-1', '!room:localhost', '', '', '', '', '', '', false, false, false, false, false, '', '{}')`)
+	require.NoError(t, err)
+	// The room's first message is at t=1000 (unix ms in the db); m3 is already known.
+	for _, m := range []struct {
+		id string
+		ts int64
+	}{{"first", 1000}, {"m3", 1200}} {
+		_, err = raw.Exec(`INSERT INTO message (bridge_id, id, part_id, mxid, room_id, room_receiver, sender_id, sender_mxid, timestamp, edit_count, metadata)
+			VALUES ('test', ?, '', ?, 'thread-1', 'login-1', 'u', '', ?, 0, '{}')`, m.id, "$"+m.id+":localhost", m.ts*int64(time.Millisecond))
+		require.NoError(t, err)
+	}
+
+	br := &Bridge{ID: "test", DB: bdb, Config: &bridgeconfig.BridgeConfig{},
+		portalsByKey: map[networkid.PortalKey]*Portal{}, portalsByMXID: map[id.RoomID]*Portal{}}
+	dbPortal, err := bdb.Portal.GetByKey(ctx, key)
+	require.NoError(t, err)
+	portal := &Portal{Portal: dbPortal, Bridge: br, Log: zerolog.Nop(), RoomCreated: exsync.NewEvent()}
+	first, err := bdb.Message.GetFirstPortalMessage(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	batch := func() []*BackfillMessage {
+		var msgs []*BackfillMessage
+		for _, m := range []struct {
+			id string
+			ts int64
+		}{{"m1", 900}, {"m2", 1100}, {"m3", 1200}, {"m4", 1300}} {
+			msgs = append(msgs, &BackfillMessage{ID: networkid.MessageID(m.id), Timestamp: time.Unix(0, m.ts*int64(time.Millisecond))})
+		}
+		return msgs
+	}
+	ids := func(msgs []*BackfillMessage) (out []string) {
+		for _, m := range msgs {
+			out = append(out, string(m.ID))
+		}
+		return
+	}
+	run := func(resp *FetchMessagesResponse) []string {
+		anchor, aggressive := knowsCutoff(resp, first)
+		return ids(portal.cutoffMessages(ctx, batch(), aggressive, false, anchor))
+	}
+
+	require.Equal(t, []string{"m1", "m2", "m4"}, run(&FetchMessagesResponse{KnowsFillGap: true}))
+	require.Equal(t, []string{"m1"}, run(&FetchMessagesResponse{}))
+}
+
+type knowsFakeBackfiller struct{ BackfillingNetworkAPI }
+
+func TestKnowsFillGapWithNothingNewIsNotAnError(t *testing.T) {
+	ctx := zerolog.Nop().WithContext(context.Background())
+	raw, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = raw.Close() })
+	db, err := dbutil.NewWithDB(raw, "sqlite3")
+	require.NoError(t, err)
+	bdb := database.New("test", database.MetaTypes{}, db)
+	require.NoError(t, bdb.Upgrade(ctx))
+	key := networkid.PortalKey{ID: "thread-1", Receiver: "login-1"}
+	_, err = raw.Exec(`INSERT INTO portal (bridge_id, id, receiver, mxid, other_user_id, name, topic, avatar_id, avatar_hash, avatar_mxc,
+		name_set, avatar_set, topic_set, name_is_custom, in_space, room_type, metadata)
+		VALUES ('test', 'thread-1', 'login-1', '!room:localhost', '', '', '', '', '', '', false, false, false, false, false, '', '{}')`)
+	require.NoError(t, err)
+	_, err = raw.Exec(`INSERT INTO message (bridge_id, id, part_id, mxid, room_id, room_receiver, sender_id, sender_mxid, timestamp, edit_count, metadata)
+		VALUES ('test', 'm1', '', '$m1:localhost', 'thread-1', 'login-1', 'u', '', 1000000000, 0, '{}')`)
+	require.NoError(t, err)
+	br := &Bridge{ID: "test", DB: bdb, Config: &bridgeconfig.BridgeConfig{},
+		portalsByKey: map[networkid.PortalKey]*Portal{}, portalsByMXID: map[id.RoomID]*Portal{}}
+	dbPortal, err := bdb.Portal.GetByKey(ctx, key)
+	require.NoError(t, err)
+	portal := &Portal{Portal: dbPortal, Bridge: br, Log: zerolog.Nop(), RoomCreated: exsync.NewEvent()}
+	source := &UserLogin{Client: knowsFakeBackfiller{}}
+
+	newResp := func(gap bool, called *bool) *FetchMessagesResponse {
+		return &FetchMessagesResponse{
+			KnowsFillGap:     gap,
+			Messages:         []*BackfillMessage{{ID: "m1", Timestamp: time.Unix(0, 2000*int64(time.Millisecond))}},
+			CompleteCallback: func() { *called = true },
+		}
+	}
+	var called bool
+	more, err := portal.doBackwardsBackfill(ctx, source, &database.BackfillTask{}, newResp(true, &called))
+	require.NoError(t, err)
+	require.False(t, more)
+	require.True(t, called, "the complete callback still runs")
+
+	_, err = portal.doBackwardsBackfill(ctx, source, &database.BackfillTask{}, newResp(false, &called))
+	require.ErrorIs(t, err, errNoMessagesLeftAfterCutoff, "default behaviour is unchanged")
+
+	// Knows: a gap-fill batch never moves the portal's real backfill task.
+	br.Config.Backfill.Queue.MaxBatches = -1
+	task := &database.BackfillTask{Cursor: "c0", OldestMessageID: "old", BatchCount: 3}
+	gap := newResp(true, &called)
+	gap.Cursor, gap.HasMore = "c1", false
+	_, err = portal.doBackfillTask(ctx, source, task, gap)
+	require.NoError(t, err)
+	require.Equal(t, networkid.PaginationCursor("c0"), task.Cursor)
+	require.Equal(t, networkid.MessageID("old"), task.OldestMessageID)
+	require.Equal(t, 3, task.BatchCount)
+	require.False(t, task.IsDone)
+	require.False(t, task.QueueDone)
+
+	plain := &database.BackfillTask{Cursor: "c0", OldestMessageID: "old", BatchCount: 3}
+	normal := newResp(false, &called)
+	normal.Cursor, normal.HasMore = "c1", false
+	_, _ = portal.doBackfillTask(ctx, source, plain, normal)
+	require.Equal(t, networkid.PaginationCursor("c1"), plain.Cursor, "a normal batch still moves the task")
+	require.True(t, plain.IsDone)
+}

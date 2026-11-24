@@ -180,9 +180,13 @@ func (portal *Portal) doBackwardsBackfill(ctx context.Context, source *UserLogin
 		Bool("has_more", resp.HasMore).
 		Int("message_count", len(resp.Messages)).
 		Msg("Fetched messages for backward backfill")
-	task.Cursor = resp.Cursor
-	task.IsDone = !resp.HasMore
-	task.QueueDone = task.IsDone
+	// Knows: a KnowsFillGap batch fills a gap above the first message and is not a page of the
+	// portal's backward backfill, so it leaves the task's cursor and done flags as they were.
+	if !resp.KnowsFillGap {
+		task.Cursor = resp.Cursor
+		task.IsDone = !resp.HasMore
+		task.QueueDone = task.IsDone
+	}
 	if len(resp.Messages) == 0 {
 		if !resp.HasMore {
 			log.Debug().Msg("No messages to backfill, marking backfill task as done")
@@ -194,10 +198,16 @@ func (portal *Portal) doBackwardsBackfill(ctx context.Context, source *UserLogin
 		}
 		return false, nil
 	}
-	resp.Messages = portal.cutoffMessages(ctx, resp.Messages, resp.AggressiveDeduplication, false, firstMessage)
+	// Knows: a KnowsFillGap batch skips the time cutoff and is deduplicated by ID only.
+	cutoffAnchor, aggressiveDedup := knowsCutoff(resp, firstMessage)
+	resp.Messages = portal.cutoffMessages(ctx, resp.Messages, aggressiveDedup, false, cutoffAnchor)
 	if len(resp.Messages) == 0 {
 		if resp.CompleteCallback != nil {
 			resp.CompleteCallback()
+		}
+		// Knows: a fully deduplicated gap-fill batch (nothing new) is not an error.
+		if resp.KnowsFillGap {
+			return false, nil
 		}
 		// Hack to handle some migrated portals where message timestamps are unknown.
 		// They can't be backfilled further, so just mark them as done.
@@ -212,7 +222,8 @@ func (portal *Portal) doBackwardsBackfill(ctx context.Context, source *UserLogin
 	if err != nil {
 		return false, fmt.Errorf("failed to send backward backfill: %w", err)
 	}
-	if len(resp.Messages) > 0 {
+	// Knows: a gap-fill batch is not older than the task's oldest message.
+	if len(resp.Messages) > 0 && !resp.KnowsFillGap {
 		task.OldestMessageID = resp.Messages[0].ID
 	}
 	return false, nil
@@ -267,6 +278,16 @@ func (portal *Portal) doThreadBackfill(ctx context.Context, source *UserLogin, t
 		return portal.sendBackfill(ctx, source, resp.Messages, true, resp.MarkRead, true, resp.CompleteCallback)
 	}
 	return nil
+}
+
+// Knows: knowsCutoff returns the anchor message and dedup mode for the backward cutoff.
+// A KnowsFillGap batch has no anchor (nothing is cut by time) and is always deduplicated by ID.
+// A nil anchor is always returned with aggressive=true: cutoffMessages relies on it (it dereferences the anchor otherwise).
+func knowsCutoff(resp *FetchMessagesResponse, first *database.Message) (anchor *database.Message, aggressive bool) {
+	if resp.KnowsFillGap {
+		return nil, true
+	}
+	return first, resp.AggressiveDeduplication
 }
 
 func (portal *Portal) cutoffMessages(ctx context.Context, messages []*BackfillMessage, aggressiveDedup, forward bool, lastMessage *database.Message) []*BackfillMessage {
