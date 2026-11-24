@@ -56,8 +56,9 @@ const (
 // the initial backfill. historyDone, which may be nil, is called once, from
 // another goroutine, when the whole initial history of the room is written (or
 // given up), for example to release a lock the bridge held across the creation.
-// It is only called when this call created the room: not when the room already
-// existed, nor when CreateMatrixRoom returns an error.
+// It is called once whenever this call created the room, even if
+// CreateMatrixRoom itself returned an error to the caller (its context ended
+// first); it is not called when the room already existed or was not created.
 func WithKnowsFirstBatch(ctx context.Context, historyDone func()) context.Context {
 	return context.WithValue(ctx, knowsContextKeyFirstBatch, &knowsFirstBatchRequest{historyDone: historyDone})
 }
@@ -132,6 +133,12 @@ func (portal *Portal) knowsCreateForwardBackfill(ctx context.Context, source *Us
 		}
 		return
 	}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			req.done()
+		}
+	}()
 	release := knowsRoomReadyFromContext(ctx)
 	// The caller may stop waiting (5 s cap, request gone): the backfill must not
 	// stop with it.
@@ -140,19 +147,27 @@ func (portal *Portal) knowsCreateForwardBackfill(ctx context.Context, source *Us
 		req.answeredEarly.Store(true)
 		release()
 	})
-	oldest, more := portal.knowsDoFirstBatch(bgCtx, source, limit)
+	oldest, more, firstDone := portal.knowsDoFirstBatch(bgCtx, source, limit)
 	capTimer.Stop()
 	portal.knowsFirstBatchWritten(source)
 	if !more {
+		if firstDone != nil {
+			firstDone()
+		}
 		release()
 		portal.knowsMakeBackfillTaskDue(bgCtx, source)
-		req.done()
 		return
 	}
 	req.answeredEarly.Store(true)
 	release()
+	handedOff = true
 	go func() {
 		defer req.done()
+		// The first batch's CompleteCallback runs after the second pass: a connector
+		// may drop its staged history in it (Signal, WhatsApp without the queue).
+		if firstDone != nil {
+			defer firstDone()
+		}
 		defer func() {
 			if v := recover(); v != nil {
 				zerolog.Ctx(bgCtx).Err(exerrors.RecoverToError(v)).
@@ -176,18 +191,21 @@ func (portal *Portal) knowsFirstBatchWritten(source *UserLogin) {
 // loop like doForwardBackfill. oldest is the timestamp of the oldest message
 // written (zero if none was), and more says whether the rest of the history
 // still has to be fetched.
-func (portal *Portal) knowsDoFirstBatch(ctx context.Context, source *UserLogin, limit int) (oldest time.Time, more bool) {
+//
+// The response's CompleteCallback is not run here but returned as firstDone,
+// for the caller to run once the whole initial history is written.
+func (portal *Portal) knowsDoFirstBatch(ctx context.Context, source *UserLogin, limit int) (oldest time.Time, more bool, firstDone func()) {
 	log := zerolog.Ctx(ctx).With().Str("action", "forward backfill").Str("knows_pass", "first_batch").Logger()
 	ctx = log.WithContext(ctx)
 	if !portal.forwardBackfillLock.TryLock() {
 		log.Warn().Msg("Another forward backfill is already running")
-		return time.Time{}, false
+		return time.Time{}, false, nil
 	}
 	defer portal.forwardBackfillLock.Unlock()
 	api, ok := source.Client.(BackfillingNetworkAPI)
 	if !ok {
 		log.Debug().Msg("Network API does not support backfilling")
-		return time.Time{}, false
+		return time.Time{}, false, nil
 	}
 	portal.backfillLock.Lock()
 	defer portal.backfillLock.Unlock()
@@ -202,43 +220,40 @@ func (portal *Portal) knowsDoFirstBatch(ctx context.Context, source *UserLogin, 
 		log.WithLevel(FailureLogLevel()).Err(err).Msg("Failed to fetch first batch for forward backfill")
 		reportBackfillFailure(ctx, "forward_fetch", err)
 		// The second pass fetches the whole history, as without the opt-in.
-		return time.Time{}, true
+		return time.Time{}, true, nil
 	} else if resp == nil {
 		log.Debug().Msg("Didn't get backfill response")
-		return time.Time{}, false
+		return time.Time{}, false, nil
 	} else if len(resp.Messages) == 0 {
 		log.Debug().Msg("No messages to backfill")
-		if resp.CompleteCallback != nil {
-			resp.CompleteCallback()
-		}
-		return time.Time{}, false
+		return time.Time{}, false, resp.CompleteCallback
 	}
 	fetched := len(resp.Messages)
+	// A full first batch means there may be more; a short one (or a connector that
+	// ignored Count and gave the whole history) does not need a second fetch.
+	more = fetched >= KnowsFirstBatchSize && fetched < limit
 	resp.Messages = portal.cutoffMessages(ctx, resp.Messages, resp.AggressiveDeduplication, true, nil)
 	if len(resp.Messages) == 0 {
-		if resp.CompleteCallback != nil {
-			resp.CompleteCallback()
-		}
-		return time.Time{}, fetched < limit
+		return time.Time{}, more, resp.CompleteCallback
 	}
-	err = portal.sendBackfill(ctx, source, resp.Messages, true, resp.MarkRead, false, resp.CompleteCallback)
+	err = portal.sendBackfill(ctx, source, resp.Messages, true, resp.MarkRead, false, nil)
 	if err != nil {
 		log.WithLevel(FailureLogLevel()).Err(err).Msg("Failed to send first batch of forward backfill")
 		reportBackfillFailure(ctx, "forward_send", err)
-		return time.Time{}, true
+		return time.Time{}, true, nil
 	} else if !resp.MarkRead && !resp.ReadUpTo.IsZero() && !resp.ReadUpTo.Before(resp.Messages[0].Timestamp) &&
 		!portal.isPastUnreadThreshold(resp.Messages) {
 		portal.markBackfillReadUpTo(ctx, source, resp.ReadUpTo)
 	}
-	// A connector that ignored Count already gave the whole history.
-	return resp.Messages[0].Timestamp, fetched < limit
+	return resp.Messages[0].Timestamp, more, resp.CompleteCallback
 }
 
 // knowsDoRestOfHistory is the second pass, outside the event loop: the same
 // forward fetch as without the opt-in, of which only the messages not newer
 // than the first batch are written, above it. Live messages that arrive
 // meanwhile are newer than the first batch and are bridged by the event loop.
-// oldest zero (the first pass wrote nothing) writes the whole fetch forward.
+// oldest zero (the first pass wrote nothing) writes the whole fetch, above
+// anything bridged meanwhile.
 func (portal *Portal) knowsDoRestOfHistory(ctx context.Context, source *UserLogin, limit int, oldest time.Time) {
 	log := zerolog.Ctx(ctx).With().Str("action", "forward backfill").Str("knows_pass", "rest").Logger()
 	ctx = log.WithContext(ctx)
@@ -283,7 +298,9 @@ func (portal *Portal) knowsDoRestOfHistory(ctx context.Context, source *UserLogi
 		}
 		return
 	}
-	err = portal.sendBackfill(ctx, source, messages, oldest.IsZero(), resp.MarkRead, false, resp.CompleteCallback)
+	// Always a backward batch: when the first pass wrote nothing, live messages
+	// may already be in the room, and the history goes above them.
+	err = portal.sendBackfill(ctx, source, messages, false, resp.MarkRead, false, resp.CompleteCallback)
 	if err != nil {
 		log.WithLevel(FailureLogLevel()).Err(err).Msg("Failed to send the rest of the initial history")
 		reportBackfillFailure(ctx, "forward_send", err)

@@ -26,6 +26,9 @@ type knowsRecorder struct {
 	// gate, when set for a call index, is waited on before that call answers.
 	gate map[int]chan struct{}
 	err  map[int]error
+	// purge empties the history in each response's CompleteCallback, as a
+	// connector that drops its staged history once it is bridged.
+	purge bool
 }
 
 func (r *knowsRecorder) fetch(ctx context.Context, params FetchMessagesParams) (*FetchMessagesResponse, error) {
@@ -45,7 +48,18 @@ func (r *knowsRecorder) fetch(ctx context.Context, params FetchMessagesParams) (
 	if err != nil {
 		return nil, err
 	}
-	return &FetchMessagesResponse{Messages: latest(r.history, params.Count), MarkRead: true}, nil
+	r.mu.Lock()
+	msgs := latest(r.history, params.Count)
+	r.mu.Unlock()
+	resp := &FetchMessagesResponse{Messages: msgs, MarkRead: true}
+	if r.purge {
+		resp.CompleteCallback = func() {
+			r.mu.Lock()
+			r.history = nil
+			r.mu.Unlock()
+		}
+	}
+	return resp, nil
 }
 
 func (r *knowsRecorder) callList() []knowsFetchCall {
@@ -192,7 +206,34 @@ func TestKnowsFirstBatchFetchErrorFallsBackToTheWholeHistory(t *testing.T) {
 	ctx := WithKnowsFirstBatch(env.ctx, func() { close(historyDone) })
 	<-knowsRun(env, ctx, func(error) {})
 	<-historyDone
-	require.Equal(t, []knowsBatch{{forward: true, ids: knowsEventIDs(1, 80)}}, env.matrix.sent())
+	require.Equal(t, []knowsBatch{{forward: false, ids: knowsEventIDs(1, 80)}}, env.matrix.sent(),
+		"written above anything bridged meanwhile")
+}
+
+func TestKnowsFirstBatchCompleteCallbackRunsAfterTheWholeHistory(t *testing.T) {
+	env := newKnowsTestEnv(t)
+	rec := &knowsRecorder{history: knowsHistory(120), purge: true}
+	env.source.Client = &knowsFetcher{fetch: rec.fetch}
+	historyDone := make(chan struct{})
+	ctx := WithKnowsFirstBatch(env.ctx, func() { close(historyDone) })
+	<-knowsRun(env, ctx, func(error) {})
+	<-historyDone
+	require.Equal(t, []knowsBatch{
+		{forward: true, ids: knowsEventIDs(71, 120)},
+		{forward: false, ids: knowsEventIDs(1, 70)},
+	}, env.matrix.sent(), "a connector that drops its history on completion loses nothing")
+}
+
+func TestKnowsFirstBatchShortFirstBatchIsOneFetch(t *testing.T) {
+	env := newKnowsTestEnv(t)
+	rec := &knowsRecorder{history: knowsHistory(30)}
+	env.source.Client = &knowsFetcher{fetch: rec.fetch}
+	historyDone := make(chan struct{})
+	ctx := WithKnowsFirstBatch(env.ctx, func() { close(historyDone) })
+	<-knowsRun(env, ctx, func(error) {})
+	<-historyDone
+	require.Len(t, rec.callList(), 1, "a chat shorter than the first batch is not fetched twice")
+	require.Equal(t, []knowsBatch{{forward: true, ids: knowsEventIDs(1, 30)}}, env.matrix.sent())
 }
 
 func TestKnowsFirstBatchShortChatIsNotFetchedTwice(t *testing.T) {

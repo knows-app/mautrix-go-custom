@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -301,6 +302,8 @@ func (kc *KnowsCallbacks) sendOnce(path string, data []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Drained so the connection is reused.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	_ = resp.Body.Close()
 	return resp.StatusCode, nil
 }
