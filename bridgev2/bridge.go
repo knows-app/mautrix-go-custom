@@ -426,13 +426,30 @@ func (br *Bridge) GetUsersToStart(ctx context.Context) ([]*User, error) {
 
 func (br *Bridge) StartLoginsForUsers(ctx context.Context, users []*User) {
 	startedAny := false
-	for _, user := range users {
-		for _, login := range user.GetUserLogins() {
-			startedAny = true
-			br.Log.Info().Str("id", string(login.ID)).Msg("Starting user login")
-			login.Client.Connect(login.Log.WithContext(ctx))
+	start := time.Now()
+	loginCount := 0
+	// Knows: KNOWS_START_LOGINS_CONCURRENCY > 1 connects the logins in a pool (knowsstartlogins.go).
+	if concurrency := KnowsStartLoginsConcurrency(); concurrency > 1 {
+		var logins []*UserLogin
+		for _, user := range users {
+			logins = append(logins, user.GetUserLogins()...)
+		}
+		startedAny = len(logins) > 0
+		loginCount = len(logins)
+		br.Log.Info().Int("login_count", loginCount).Int("concurrency", concurrency).Msg("Starting user logins in a pool")
+		br.knowsConnectLogins(ctx, logins, concurrency)
+	} else {
+		for _, user := range users {
+			for _, login := range user.GetUserLogins() {
+				startedAny = true
+				loginCount++
+				br.Log.Info().Str("id", string(login.ID)).Msg("Starting user login")
+				login.Client.Connect(login.Log.WithContext(ctx))
+				br.knowsSetLoginsReady(loginCount, 0, false)
+			}
 		}
 	}
+	br.knowsSetLoginsReady(loginCount, loginCount, true)
 	if !startedAny {
 		br.Log.Info().Msg("No user logins found")
 		br.SendGlobalBridgeState(ctx, status.BridgeState{StateEvent: status.StateUnconfigured})
@@ -441,7 +458,10 @@ func (br *Bridge) StartLoginsForUsers(ctx context.Context, users []*User) {
 		go br.RunBackfillQueue()
 	}
 
-	br.Log.Info().Msg("Bridge started")
+	br.Log.Info().
+		Int("login_count", loginCount).
+		Int64("start_logins_ms", time.Since(start).Milliseconds()).
+		Msg("Bridge started")
 }
 
 func (br *Bridge) GenerateContentURI(ctx context.Context, roomID id.RoomID, mediaID networkid.MediaID) (id.ContentURIString, *event.EncryptedFileInfo, error) {

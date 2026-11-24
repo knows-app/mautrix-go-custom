@@ -291,6 +291,10 @@ func (as *AppService) GetLive(w http.ResponseWriter, r *http.Request) {
 }
 
 func (as *AppService) GetReady(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("logins") == "1" {
+		as.getReadyWithLogins(w)
+		return
+	}
 	if as.Ready {
 		exhttp.WriteEmptyJSONResponse(w, http.StatusOK)
 	} else {
