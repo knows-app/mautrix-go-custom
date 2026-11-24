@@ -113,6 +113,10 @@ type Portal struct {
 	backfillLock             sync.Mutex
 	forwardBackfillLock      sync.Mutex
 	nextBackfillDoneCallback func(error)
+
+	// Knows: KNOWS_PORTAL_OVERFLOW, see knowsoverflow.go.
+	knowsOverflowOn    bool
+	knowsOverflowQueue knowsPortalOverflow
 }
 
 var PanicOnStuckEvent = false
@@ -183,6 +187,7 @@ func (br *Bridge) loadPortal(ctx context.Context, dbPortal *database.Portal, que
 	}
 	if br.Config.PortalEventBuffer != 0 {
 		portal.events = make(chan portalEvent, br.Config.PortalEventBuffer)
+		portal.knowsOverflowOn = KnowsFlag(KnowsPortalOverflowEnv)
 		go portal.eventLoop()
 	}
 	return portal, nil
@@ -379,6 +384,9 @@ func (portal *Portal) queueEvent(ctx context.Context, evt portalEvent) EventHand
 		defer portal.eventsSendLock.RUnlock()
 		if portal.backgroundCtx.Err() != nil {
 			return EventHandlingResultIgnored
+		}
+		if remoteEvt, ok := evt.(*portalRemoteEvent); ok && portal.knowsOverflowOn {
+			return portal.knowsQueueRemoteEvent(ctx, remoteEvt)
 		}
 		select {
 		case portal.events <- evt:
