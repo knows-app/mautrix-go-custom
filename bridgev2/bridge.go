@@ -40,6 +40,9 @@ type Bridge struct {
 	Bot            MatrixAPI
 	Network        NetworkConnector
 	LoginAdmission LoginAdmissionResolver
+	// KnowsCallbacks posts the Knows callbacks to knows-api. nil (the default,
+	// KNOWS_CALLBACKS unset) sends nothing.
+	KnowsCallbacks *KnowsCallbacks
 	Commands       CommandProcessor
 	Config         *bridgeconfig.BridgeConfig
 

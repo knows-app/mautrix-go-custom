@@ -511,6 +511,13 @@ type FetchMessagesParams struct {
 
 	// When the messages are being fetched for a queued backfill, this is the task object.
 	Task *database.BackfillTask
+
+	// Knows: this forward fetch is the first batch of a chat a user is waiting on (create_dm or
+	// sync-thread with first_batch=1). Count is at most KnowsFirstBatchSize. The connector should
+	// answer fast: skip pauses between pages and defer slow work it can (media it can serve on
+	// demand, reaction lookups). The messages of this batch are not sent again; the rest of the
+	// history comes from a second, normal forward fetch right after.
+	KnowsFirstBatch bool
 }
 
 // BackfillReaction is an individual reaction to a message in a history pagination request.
