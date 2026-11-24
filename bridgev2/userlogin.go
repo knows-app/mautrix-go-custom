@@ -13,6 +13,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -42,6 +43,8 @@ type UserLogin struct {
 
 	// Knows: the login's in-memory overflow slots (KNOWS_PORTAL_OVERFLOW).
 	knowsOverflow knowsLoginOverflow
+	// Knows: set once a contact list was answered (contacts.first_answer_ms).
+	knowsContactsAnswered atomic.Bool
 }
 
 var ErrorOnUserLoginLoadFail = false
