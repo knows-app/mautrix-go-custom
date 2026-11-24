@@ -23,9 +23,9 @@ import (
 // the busy portal catches up ("Portal event channel is full"). With
 // KNOWS_PORTAL_OVERFLOW=1, such an event is kept in memory instead, in a FIFO
 // per portal that feeds the channel in order:
-//   - up to KnowsPortalRemoteBuffer (512) events per portal are kept freely;
-//   - beyond that, each event takes one of the login's KnowsPortalOverflowPerLogin
-//     (10 000) slots, shared by all its portals;
+//   - each event kept in memory takes one of the login's
+//     KnowsPortalOverflowPerLogin (10 000) slots, shared by all its portals, so
+//     a login never holds more than that beyond its channels;
 //   - with no slot left, the caller blocks as upstream does, until a slot frees
 //     up or the portal is deleted.
 // Matrix events and room creations keep the upstream path. The memory queue is
@@ -36,9 +36,6 @@ import (
 const KnowsPortalOverflowEnv = "KNOWS_PORTAL_OVERFLOW"
 
 var (
-	// KnowsPortalRemoteBuffer is how many remote events a portal keeps in
-	// memory, beyond its channel, before using its login's slots.
-	KnowsPortalRemoteBuffer = 512
 	// KnowsPortalOverflowPerLogin is how many more remote events a login's
 	// portals may keep in memory before its event loop blocks again.
 	KnowsPortalOverflowPerLogin = 10000
@@ -128,11 +125,10 @@ func (portal *Portal) knowsQueueRemoteEvent(ctx context.Context, evt *portalRemo
 		default:
 		}
 	}
-	held := len(ov.items)
 	ov.lock.Unlock()
 
 	item := knowsOverflowItem{evt: evt}
-	if held >= KnowsPortalRemoteBuffer && evt.source != nil {
+	if evt.source != nil {
 		if !portal.knowsTakeOverflowSlot(ctx, evt.source) {
 			return EventHandlingResultIgnored
 		}
@@ -150,7 +146,6 @@ func (portal *Portal) knowsQueueRemoteEvent(ctx context.Context, evt *portalRemo
 	ov.lock.Unlock()
 	if started {
 		zerolog.Ctx(ctx).Warn().
-			Str("portal_id", string(portal.ID)).
 			Int64("portal_channel_full", total).
 			Msg("Portal event channel is full, keeping events in memory")
 	}
@@ -159,7 +154,8 @@ func (portal *Portal) knowsQueueRemoteEvent(ctx context.Context, evt *portalRemo
 
 // knowsPumpOverflow moves a portal's overflowed events into its channel, in
 // order. An event leaves the memory queue only once it is in the channel, so a
-// newer event can never pass it.
+// newer event of the same caller can never pass it. (Two callers racing for the
+// same portal, one of them waiting for a slot, are not ordered, as upstream.)
 func (portal *Portal) knowsPumpOverflow() {
 	ov := &portal.knowsOverflowQueue
 	moved := 0
@@ -170,7 +166,7 @@ func (portal *Portal) knowsPumpOverflow() {
 			ov.pumping = false
 			since := ov.since
 			ov.lock.Unlock()
-			portal.Log.Debug().
+			portal.Bridge.Log.Debug().
 				Int("event_count", moved).
 				Int64("overflow_ms", time.Since(since).Milliseconds()).
 				Msg("Portal event overflow drained")

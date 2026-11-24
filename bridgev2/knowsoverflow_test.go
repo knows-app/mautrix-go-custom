@@ -20,7 +20,7 @@ import (
 // its channel until the test does.
 func knowsQueuePortal(t *testing.T, id string, buffer int, overflow bool) *Portal {
 	t.Helper()
-	br := &Bridge{Config: &bridgeconfig.BridgeConfig{PortalEventBuffer: buffer}}
+	br := &Bridge{Config: &bridgeconfig.BridgeConfig{PortalEventBuffer: buffer}, Log: zerolog.Nop()}
 	br.BackgroundCtx = context.Background()
 	portal := &Portal{
 		Portal:          &database.Portal{PortalKey: networkid.PortalKey{ID: networkid.PortalID(id)}},
@@ -57,10 +57,10 @@ func knowsRead(t *testing.T, portal *Portal) int {
 	}
 }
 
-func knowsSetCaps(t *testing.T, perPortal, perLogin int) {
-	oldPortal, oldLogin := KnowsPortalRemoteBuffer, KnowsPortalOverflowPerLogin
-	KnowsPortalRemoteBuffer, KnowsPortalOverflowPerLogin = perPortal, perLogin
-	t.Cleanup(func() { KnowsPortalRemoteBuffer, KnowsPortalOverflowPerLogin = oldPortal, oldLogin })
+func knowsSetCaps(t *testing.T, perLogin int) {
+	old := KnowsPortalOverflowPerLogin
+	KnowsPortalOverflowPerLogin = perLogin
+	t.Cleanup(func() { KnowsPortalOverflowPerLogin = old })
 }
 
 func TestKnowsPortalOverflowOffBlocksAsUpstream(t *testing.T) {
@@ -103,27 +103,27 @@ func TestKnowsPortalOverflowKeepsTheLoginLoopRunningAndTheOrder(t *testing.T) {
 }
 
 func TestKnowsPortalOverflowBlocksAtTheLoginCap(t *testing.T) {
-	knowsSetCaps(t, 2, 3)
+	knowsSetCaps(t, 4)
 	login := &UserLogin{}
 	busy := knowsQueuePortal(t, "busy", 1, true)
 	other := knowsQueuePortal(t, "other", 1, true)
 	ctx := context.Background()
-	// channel 1 + free 2 + login slots 3 = 6 events without blocking.
-	for i := 1; i <= 6; i++ {
+	// channel 1 + 3 of the login's 4 slots.
+	for i := 1; i <= 4; i++ {
 		require.Equal(t, EventHandlingResultQueued, busy.queueEvent(ctx, knowsRemote(login, i)))
 	}
-	blocked := knowsQueueAsync(busy, knowsRemote(login, 7))
+	// Another chat of the same login: its channel slot, then the last login slot.
+	for i := 1; i <= 2; i++ {
+		require.Equal(t, EventHandlingResultQueued, other.queueEvent(ctx, knowsRemote(login, 100+i)))
+	}
+	blocked := knowsQueueAsync(busy, knowsRemote(login, 5))
 	select {
 	case <-blocked:
 		t.Fatal("past the login cap, the caller must block as upstream")
 	case <-time.After(100 * time.Millisecond):
 	}
-	// Another chat of the same login still has its own free buffer...
-	for i := 1; i <= 3; i++ {
-		require.Equal(t, EventHandlingResultQueued, other.queueEvent(ctx, knowsRemote(login, 100+i)))
-	}
-	// ...but shares the login's slots.
-	otherBlocked := knowsQueueAsync(other, knowsRemote(login, 104))
+	// The login's slots are shared: its other chat blocks too.
+	otherBlocked := knowsQueueAsync(other, knowsRemote(login, 103))
 	select {
 	case <-otherBlocked:
 		t.Fatal("the login's slots are shared by its portals")
@@ -131,15 +131,15 @@ func TestKnowsPortalOverflowBlocksAtTheLoginCap(t *testing.T) {
 	}
 	// A portal of another login is not affected.
 	stranger := knowsQueuePortal(t, "stranger", 1, true)
-	for i := 1; i <= 6; i++ {
+	for i := 1; i <= 5; i++ {
 		require.Equal(t, EventHandlingResultQueued, stranger.queueEvent(ctx, knowsRemote(&UserLogin{}, i)))
 	}
-	// Consuming the busy portal frees a slot; order is kept.
-	for i := 1; i <= 7; i++ {
+	// Consuming frees slots; order is kept.
+	for i := 1; i <= 5; i++ {
 		require.Equal(t, i, knowsRead(t, busy))
 	}
 	require.Equal(t, EventHandlingResultQueued, <-blocked)
-	for i := 101; i <= 104; i++ {
+	for i := 101; i <= 103; i++ {
 		require.Equal(t, i, knowsRead(t, other))
 	}
 	require.Equal(t, EventHandlingResultQueued, <-otherBlocked)
@@ -148,7 +148,7 @@ func TestKnowsPortalOverflowBlocksAtTheLoginCap(t *testing.T) {
 }
 
 func TestKnowsPortalOverflowDeletedPortalReleasesEverything(t *testing.T) {
-	knowsSetCaps(t, 0, 2)
+	knowsSetCaps(t, 2)
 	login := &UserLogin{}
 	portal := knowsQueuePortal(t, "p", 1, true)
 	ctx := context.Background()
@@ -164,7 +164,7 @@ func TestKnowsPortalOverflowDeletedPortalReleasesEverything(t *testing.T) {
 }
 
 func TestKnowsPortalOverflowConcurrentChatsKeepTheirOrder(t *testing.T) {
-	knowsSetCaps(t, 8, 50)
+	knowsSetCaps(t, 50)
 	login := &UserLogin{}
 	const chats, perChat = 6, 200
 	portals := make([]*Portal, chats)
