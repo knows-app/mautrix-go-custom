@@ -39,6 +39,9 @@ type UserLogin struct {
 	spaceCreateLock sync.Mutex
 	deleteLock      sync.Mutex
 	disconnectOnce  sync.Once
+
+	// Knows: the login's in-memory overflow slots (KNOWS_PORTAL_OVERFLOW).
+	knowsOverflow knowsLoginOverflow
 }
 
 var ErrorOnUserLoginLoadFail = false
