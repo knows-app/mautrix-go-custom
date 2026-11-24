@@ -122,7 +122,8 @@ func knowsRoomReadyFromContext(ctx context.Context) func() {
 func (portal *Portal) knowsCreateForwardBackfill(ctx context.Context, source *UserLogin, bundle any) {
 	req := knowsFirstBatchFromContext(ctx)
 	limit := portal.Bridge.Config.Backfill.MaxInitialMessages
-	if req == nil || bundle != nil || limit <= KnowsFirstBatchSize {
+	// Without batch sending the rest could not be written above the first batch: one pass, as upstream.
+	if req == nil || bundle != nil || limit <= KnowsFirstBatchSize || !portal.Bridge.Matrix.GetCapabilities().BatchSending {
 		portal.doForwardBackfill(ctx, source, nil, bundle)
 		portal.knowsFirstBatchWritten(source)
 		if req != nil {

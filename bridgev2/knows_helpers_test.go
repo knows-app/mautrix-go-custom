@@ -26,6 +26,7 @@ type knowsFakeMatrix struct {
 	MatrixConnector
 	mu      sync.Mutex
 	batches []knowsBatch
+	noBatch bool
 }
 
 type knowsBatch struct {
@@ -34,7 +35,7 @@ type knowsBatch struct {
 }
 
 func (m *knowsFakeMatrix) GetCapabilities() *MatrixCapabilities {
-	return &MatrixCapabilities{BatchSending: true}
+	return &MatrixCapabilities{BatchSending: !m.noBatch}
 }
 func (m *knowsFakeMatrix) GhostIntent(networkid.UserID) MatrixAPI { return nil }
 func (m *knowsFakeMatrix) GenerateDeterministicEventID(_ id.RoomID, _ networkid.PortalKey, msgID networkid.MessageID, _ networkid.PartID) id.EventID {

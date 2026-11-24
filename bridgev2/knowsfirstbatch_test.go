@@ -171,6 +171,19 @@ func TestKnowsFirstBatchSmallLimitIsOnePass(t *testing.T) {
 	require.False(t, KnowsAnsweredAtFirstBatch(ctx))
 }
 
+func TestKnowsFirstBatchNeedsBatchSending(t *testing.T) {
+	env := newKnowsTestEnv(t)
+	env.matrix.noBatch = true
+	// An empty chat: sendLegacyBackfill needs a full Matrix stack, only the fetches are checked here.
+	rec := &knowsRecorder{history: knowsHistory(0)}
+	env.source.Client = &knowsFetcher{fetch: rec.fetch}
+	historyDone := make(chan struct{})
+	ctx := WithKnowsFirstBatch(env.ctx, func() { close(historyDone) })
+	<-knowsRun(env, ctx, func(error) {})
+	<-historyDone
+	require.Equal(t, []knowsFetchCall{{count: 500}}, rec.callList(), "older messages cannot go above the first batch: one pass")
+}
+
 func TestKnowsFirstBatchFetchErrorFallsBackToTheWholeHistory(t *testing.T) {
 	env := newKnowsTestEnv(t)
 	rec := &knowsRecorder{history: knowsHistory(80), err: map[int]error{0: errors.New("rate limited")}}
