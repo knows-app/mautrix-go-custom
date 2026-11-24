@@ -375,7 +375,10 @@ func (portal *Portal) doBackfillTask(ctx context.Context, source *UserLogin, tas
 		} else if pending {
 			return false, nil
 		}
-		task.BatchCount++
+		// Knows: a KnowsFillGap batch is not one of the task's batches.
+		if resp == nil || !resp.KnowsFillGap {
+			task.BatchCount++
+		}
 	} else {
 		zerolog.Ctx(ctx).Debug().
 			Int("max_batches", maxBatches).

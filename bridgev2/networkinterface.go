@@ -616,6 +616,10 @@ type FetchMessagesResponse struct {
 	// or newer than the first for backward.
 	AggressiveDeduplication bool
 
+	// Knows: for a backward batch that may be newer than the room's first message (e.g. restored history
+	// handed over as a ManualBackfill). The time cutoff is skipped and messages are deduplicated by ID only.
+	KnowsFillGap bool
+
 	// When HasMore is true, one of the following fields can be set to report backfill progress:
 
 	// Approximate backfill progress as a number between 0 and 1.
