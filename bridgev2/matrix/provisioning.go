@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/pprof"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -537,12 +538,22 @@ func knowsResolveContext(r *http.Request, createChat bool) context.Context {
 	return r.Context()
 }
 
+// knowsWaitMS reads the wait_ms query parameter (Knows): 0 when absent or invalid.
+func knowsWaitMS(r *http.Request) time.Duration {
+	ms, err := strconv.Atoi(r.URL.Query().Get("wait_ms"))
+	if err != nil || ms <= 0 {
+		return 0
+	}
+	return min(time.Duration(ms)*time.Millisecond, provisionutil.KnowsContactsMaxWait)
+}
+
 func (prov *ProvisioningAPI) GetContactList(w http.ResponseWriter, r *http.Request) {
 	login := prov.GetLoginForRequest(w, r)
 	if login == nil {
 		return
 	}
-	resp, err := provisionutil.GetContactList(r.Context(), login)
+	// Knows: wait_ms (opt-in by the caller) answers once the first contact list is ready.
+	resp, err := provisionutil.GetContactListWait(r.Context(), login, knowsWaitMS(r))
 	if err != nil {
 		RespondWithError(w, err, "Internal error getting contact list")
 		return
