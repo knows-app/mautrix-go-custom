@@ -366,6 +366,7 @@ func (bsq *BridgeStateQueue) Send(state status.BridgeState) {
 		return
 	}
 
+	reportBridgeState(bsq.login.Log.WithContext(context.Background()), state, bsq.prevUnsent)
 	bsq.prevUnsent = &state
 
 	if len(bsq.ch) >= 8 {
