@@ -270,3 +270,12 @@ func TestBridgeStateReportsLostLoginsOncePerCause(t *testing.T) {
 	require.Contains(t, rec.logs.String(), `"failure_errcode":"IG_DGW_CONNECTION_ERROR"`)
 	rec.assertClean(t)
 }
+
+// One cause, one report: the line next to a ReportFailure is an error only when
+// nothing reports the failure.
+func TestFailureLogLevelFollowsTheReporter(t *testing.T) {
+	SetFailureReporter(nil)
+	require.Equal(t, zerolog.ErrorLevel, FailureLogLevel())
+	recordFailures(t)
+	require.Equal(t, zerolog.WarnLevel, FailureLogLevel())
+}

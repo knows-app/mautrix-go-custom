@@ -61,7 +61,7 @@ func (portal *Portal) doForwardBackfill(ctx context.Context, source *UserLogin, 
 		BundledData:   bundledData,
 	})
 	if err != nil {
-		log.Err(err).Msg("Failed to fetch messages for forward backfill")
+		log.WithLevel(FailureLogLevel()).Err(err).Msg("Failed to fetch messages for forward backfill")
 		reportBackfillFailure(ctx, "forward_fetch", err)
 		return
 	} else if resp == nil {
@@ -91,7 +91,7 @@ func (portal *Portal) doForwardBackfill(ctx context.Context, source *UserLogin, 
 	}
 	err = portal.sendBackfill(ctx, source, resp.Messages, true, resp.MarkRead, false, resp.CompleteCallback)
 	if err != nil {
-		log.Err(err).Msg("Failed to send forward backfill")
+		log.WithLevel(FailureLogLevel()).Err(err).Msg("Failed to send forward backfill")
 		reportBackfillFailure(ctx, "forward_send", err)
 	} else if !resp.MarkRead && !resp.ReadUpTo.IsZero() && !resp.ReadUpTo.Before(resp.Messages[0].Timestamp) &&
 		!portal.isPastUnreadThreshold(resp.Messages) {
@@ -241,7 +241,7 @@ func (portal *Portal) fetchThreadBackfill(ctx context.Context, source *UserLogin
 		Count:         portal.Bridge.Config.Backfill.Threads.MaxInitialMessages,
 	})
 	if err != nil {
-		log.Err(err).Msg("Failed to fetch messages for thread backfill")
+		log.WithLevel(FailureLogLevel()).Err(err).Msg("Failed to fetch messages for thread backfill")
 		reportBackfillFailure(ctx, "thread_fetch", err)
 		return nil
 	} else if resp == nil {

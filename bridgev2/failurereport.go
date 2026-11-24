@@ -132,7 +132,7 @@ func cleanFailureAttrs(attrs map[string]string) map[string]string {
 // from code (a constant or an allowlist), never text from a message, a user or
 // a remote answer; errcode is the bridge's own error code. The log line is at
 // warn level so a logger that forwards error lines does not report the failure
-// twice; the original error line, if any, stays where it was. A failure caused
+// twice; a line logged right next to the call uses FailureLogLevel. A failure caused
 // by cancellation (shutdown, a closed request) is not a failure and is skipped.
 func ReportFailure(ctx context.Context, event string, warning bool, err error, attrs map[string]string) {
 	if err != nil && errors.Is(err, context.Canceled) {
@@ -143,6 +143,17 @@ func ReportFailure(ctx context.Context, event string, warning bool, err error, a
 	if fn := failureReporter.Load(); fn != nil {
 		(*fn)(event, warning, err, clean)
 	}
+}
+
+// FailureLogLevel is the level of a log line that stands right next to a
+// ReportFailure call for the same failure: error when nothing reports it, warn
+// when a FailureReporter is installed, so a logger that forwards error lines to
+// the same place as the reporter does not open a second issue for one cause.
+func FailureLogLevel() zerolog.Level {
+	if failureReporter.Load() != nil {
+		return zerolog.WarnLevel
+	}
+	return zerolog.ErrorLevel
 }
 
 func logFailure(ctx context.Context, event string, warning bool, err error, clean map[string]string) {
