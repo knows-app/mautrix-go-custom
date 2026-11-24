@@ -79,7 +79,7 @@ func (br *Bridge) knowsConnectLogins(ctx context.Context, logins []*UserLogin, n
 			select {
 			case <-connected:
 			case <-time.After(KnowsStartLoginMaxWait):
-				login.Log.Warn().
+				br.Log.Warn().
 					Stringer("waited", KnowsStartLoginMaxWait).
 					Msg("Login still connecting, starting the next ones")
 			}
