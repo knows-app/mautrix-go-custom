@@ -118,15 +118,16 @@ func (m *membersMatrix) GetMembers(context.Context, id.RoomID) (map[id.UserID]*e
 	return m.members, nil
 }
 
-// deletingBot records the rooms it was asked to delete.
+// deletingBot records the rooms it was asked to delete, and answers err.
 type deletingBot struct {
 	MatrixAPI
 	deleted []id.RoomID
+	err     error
 }
 
 func (b *deletingBot) DeleteRoom(_ context.Context, roomID id.RoomID, _ bool) error {
 	b.deleted = append(b.deleted, roomID)
-	return nil
+	return b.err
 }
 
 // Dev 25/11 (Discord): a DM picked by a user who was not in the portal's old room got a new room, but the old
@@ -154,7 +155,8 @@ func TestCleanupOrphanedDMForgetsTheOldRoomsMessages(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	bot := &deletingBot{}
+	// The old room was already deleted by an account deletion (M_NOT_FOUND): not an error, rows still cleared.
+	bot := &deletingBot{err: mautrix.MNotFound}
 	br := &Bridge{ID: "test", DB: bdb, Bot: bot, Config: &bridgeconfig.BridgeConfig{},
 		Matrix:       &membersMatrix{members: map[id.UserID]*event.MemberEventContent{"@previous:localhost": {Membership: event.MembershipJoin}}},
 		portalsByKey: map[networkid.PortalKey]*Portal{}, portalsByMXID: map[id.RoomID]*Portal{}}
