@@ -112,7 +112,10 @@ func (portal *Portal) CleanupOrphanedDM(ctx context.Context, userMXID id.UserID)
 	}
 
 	oldRoomID := portal.MXID
-	if err = portal.RemoveMXID(ctx); err != nil {
+	// Knows: the old room's message and reaction rows go with it (ForgetDeadRoom). Kept, they made the new
+	// room's backfill drop every message it fetched after the first batch as a duplicate (dev 25/11, Discord:
+	// 50 of 101 messages), and the first batch's own rows failed to insert.
+	if err = portal.ForgetDeadRoom(ctx); err != nil {
 		log.Err(err).Msg("Failed to delete old portal mxid")
 	} else if err = portal.Bridge.Bot.DeleteRoom(ctx, oldRoomID, true); err != nil {
 		log.Err(err).Msg("Failed to clean up old portal room")
