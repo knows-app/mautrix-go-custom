@@ -45,9 +45,10 @@ func (portal *Portal) RoomIsGone(ctx context.Context) bool {
 	return false
 }
 
-// ForgetDeadRoom clears the mxid of a portal whose room is gone, and the portal's message and reaction rows,
-// which belong to the old room: a fresh room re-inserts the same message IDs, and forward backfill anchors on
-// the newest message row, so leftovers would make the new room's first fill fetch nothing.
+// ForgetDeadRoom clears the mxid of a portal whose room is gone (or is being replaced, CleanupOrphanedDM), and
+// the portal's message and reaction rows, which belong to the old room: a fresh room re-inserts the same message
+// IDs, and forward backfill anchors on the newest message row, so leftovers would make the new room's first fill
+// fetch nothing, or drop what it fetched as duplicates.
 func (portal *Portal) ForgetDeadRoom(ctx context.Context) error {
 	for _, tbl := range []string{"reaction", "message"} {
 		if _, err := portal.Bridge.DB.Exec(ctx,

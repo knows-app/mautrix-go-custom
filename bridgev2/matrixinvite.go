@@ -14,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
@@ -112,9 +113,15 @@ func (portal *Portal) CleanupOrphanedDM(ctx context.Context, userMXID id.UserID)
 	}
 
 	oldRoomID := portal.MXID
-	if err = portal.RemoveMXID(ctx); err != nil {
+	// Knows: the old room's message and reaction rows go with it (ForgetDeadRoom). Kept, they made the new
+	// room's backfill drop every message it fetched after the first batch as a duplicate (dev 25/11, Discord:
+	// 50 of 101 messages), and the first batch's own rows failed to insert.
+	if err = portal.ForgetDeadRoom(ctx); err != nil {
 		log.Err(err).Msg("Failed to delete old portal mxid")
-	} else if err = portal.Bridge.Bot.DeleteRoom(ctx, oldRoomID, true); err != nil {
+	} else if err = portal.Bridge.Bot.DeleteRoom(ctx, oldRoomID, true); errors.Is(err, mautrix.MNotFound) {
+		// Knows: the room was already deleted (an account deletion or an admin purge): nothing to clean up.
+		log.Debug().Stringer("old_portal_mxid", oldRoomID).Msg("Old portal room was already gone")
+	} else if err != nil {
 		log.Err(err).Msg("Failed to clean up old portal room")
 	}
 }
