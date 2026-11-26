@@ -383,6 +383,9 @@ func (portal *Portal) sendBackfill(
 	inThread bool,
 	done func(),
 ) error {
+	if portal.MXID == "" {
+		return ErrPortalHasNoRoom
+	}
 	canBatchSend := portal.Bridge.Matrix.GetCapabilities().BatchSending
 	forceMarkRead := portal.isPastUnreadThreshold(messages)
 	zerolog.Ctx(ctx).Info().
@@ -398,6 +401,8 @@ func (portal *Portal) sendBackfill(
 		err = portal.sendLegacyBackfill(ctx, source, messages, markRead || forceMarkRead)
 	}
 	if err != nil {
+		// Knows: KNOWS_RECOVER_DEAD_ROOM_ON_WRITE, a room deleted behind the bridge is forgotten here, once.
+		portal.knowsRecoverDeadRoomOnWrite(ctx, err)
 		return err
 	}
 	if done != nil {

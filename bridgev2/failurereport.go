@@ -310,7 +310,9 @@ func reportReceiveFailure(ctx context.Context, evtType RemoteEventType, res Even
 
 // reportBackfillFailure reports a failed history fetch or send.
 func reportBackfillFailure(ctx context.Context, step string, err error) {
-	if err == nil || errors.Is(err, errNoMessagesLeftAfterCutoff) {
+	// A portal without a room (ErrPortalHasNoRoom) is not a failure: its room was forgotten and is re-created
+	// on the next resync or pick.
+	if err == nil || errors.Is(err, errNoMessagesLeftAfterCutoff) || errors.Is(err, ErrPortalHasNoRoom) {
 		return
 	}
 	ReportFailure(ctx, FailureBackfill, false, err, map[string]string{

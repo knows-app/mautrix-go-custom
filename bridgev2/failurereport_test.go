@@ -203,6 +203,7 @@ func TestBackfillFailureReports(t *testing.T) {
 	rec := recordFailures(t)
 	reportBackfillFailure(rec.ctx(), "forward_fetch", errors.New(secretText))
 	reportBackfillFailure(rec.ctx(), "queue_task", errNoMessagesLeftAfterCutoff)
+	reportBackfillFailure(rec.ctx(), "manual_task", fmt.Errorf("failed to backfill: %w", ErrPortalHasNoRoom))
 	reportBackfillFailure(rec.ctx(), "queue_task", nil)
 	require.Len(t, rec.got, 1)
 	require.Equal(t, FailureBackfill, rec.got[0].event)

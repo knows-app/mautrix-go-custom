@@ -396,6 +396,11 @@ func (br *Bridge) getPortalAndDoBackfillTask(ctx context.Context, task *database
 }
 
 func (portal *Portal) doBackfillTask(ctx context.Context, source *UserLogin, task *database.BackfillTask, resp *FetchMessagesResponse) (bool, error) {
+	// Knows: a manual backfill (ManualBackfill.Do) can reach a portal whose room was forgotten; the queue
+	// path already skips it (getPortalAndDoBackfillTask).
+	if portal.MXID == "" {
+		return false, ErrPortalHasNoRoom
+	}
 	maxBatches := portal.Bridge.Config.Backfill.Queue.MaxBatches
 	api, ok := source.Client.(BackfillingNetworkAPI)
 	if !ok {

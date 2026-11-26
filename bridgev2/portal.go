@@ -646,6 +646,10 @@ func (portal *Portal) handleSingleEvent(ctx context.Context, rawEvt any, doneCal
 		res = portal.handleRemoteEvent(ctx, evt.source, evt.evtType, evt.evt)
 		if portal.backgroundCtx.Err() == nil {
 			reportReceiveFailure(ctx, evt.evtType, res)
+			if !res.Success {
+				// Knows: KNOWS_RECOVER_DEAD_ROOM_ON_WRITE (receipts, reactions, messages into a deleted room).
+				portal.knowsRecoverDeadRoomOnWrite(ctx, res.Error)
+			}
 		}
 	case *portalCreateEvent:
 		// Knows: a waiting caller may be answered early (first batch), so only the first answer counts.
