@@ -236,7 +236,7 @@ func (mt *ManualBackfill) Do(ctx context.Context) {
 			StatusCode: http.StatusConflict,
 		}
 		log.Debug().Msg("Backfill task changed before dispatch")
-	} else if completed, err = mt.Portal.doBackfillTask(ctx, mt.Source, task, mt.Data); err != nil {
+	} else if completed, err = mt.Portal.knowsDoBackfillTask(ctx, mt.Source, task, mt.Data); err != nil {
 		log.WithLevel(FailureLogLevel()).Err(err).Msg("Failed to do backwards backfill from event")
 		reportBackfillFailure(ctx, "manual_task", err)
 		updateTask = errors.Is(err, errNoMessagesLeftAfterCutoff)
@@ -392,7 +392,7 @@ func (br *Bridge) getPortalAndDoBackfillTask(ctx context.Context, task *database
 		portal.backfillLock.Lock()
 	}
 	defer portal.backfillLock.Unlock()
-	return portal.doBackfillTask(ctx, login, task, nil)
+	return portal.knowsDoBackfillTask(ctx, login, task, nil)
 }
 
 func (portal *Portal) doBackfillTask(ctx context.Context, source *UserLogin, task *database.BackfillTask, resp *FetchMessagesResponse) (bool, error) {

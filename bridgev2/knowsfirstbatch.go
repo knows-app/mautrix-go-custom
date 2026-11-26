@@ -131,6 +131,7 @@ func (portal *Portal) knowsCreateForwardBackfill(ctx context.Context, source *Us
 			portal.knowsMakeBackfillTaskDue(ctx, source)
 			req.done()
 		}
+		portal.knowsHistoryDoneAfterForward(ctx, source)
 		return
 	}
 	handedOff := false
@@ -156,6 +157,7 @@ func (portal *Portal) knowsCreateForwardBackfill(ctx context.Context, source *Us
 		}
 		release()
 		portal.knowsMakeBackfillTaskDue(bgCtx, source)
+		portal.knowsHistoryDoneAfterForward(bgCtx, source)
 		return
 	}
 	req.answeredEarly.Store(true)
@@ -177,6 +179,7 @@ func (portal *Portal) knowsCreateForwardBackfill(ctx context.Context, source *Us
 		}()
 		portal.knowsDoRestOfHistory(bgCtx, source, limit, oldest)
 		portal.knowsMakeBackfillTaskDue(bgCtx, source)
+		portal.knowsHistoryDoneAfterForward(bgCtx, source)
 	}()
 }
 
