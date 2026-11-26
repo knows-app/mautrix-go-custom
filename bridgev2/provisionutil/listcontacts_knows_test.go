@@ -193,3 +193,24 @@ func TestKnowsContactListLimitedDuringTheWaitIsReleasedByTheEvent(t *testing.T) 
 	require.NotNil(t, resp.RateLimited)
 	require.Equal(t, 120, resp.RateLimited.RetryAfterS)
 }
+
+// knowsUnknownReadyClient implements the interface but cannot tell (a connector whose switch is off): nil channel.
+type knowsUnknownReadyClient struct {
+	knowsContactsClient
+}
+
+func (c *knowsUnknownReadyClient) KnowsContactListReady() <-chan struct{} { return nil }
+
+// Meta #110 with its switch off answered a closed channel, so knows_list_ready=true on a list that could still
+// be empty. A nil channel now means "cannot tell": answered at once, without knows_list_ready.
+func TestKnowsContactListNilReadyChannelAnswersAtOnce(t *testing.T) {
+	start := time.Now()
+	resp, err := GetContactListWait(context.Background(), knowsLogin(&knowsUnknownReadyClient{knowsContactsClient{contacts: 1}}), 5*time.Second)
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 50*time.Millisecond)
+	require.Nil(t, resp.KnowsListReady)
+	data, err := json.Marshal(resp)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "knows_list_ready")
+	require.False(t, knowsWaitContactList(context.Background(), nil, time.Hour), "never blocks on nil")
+}

@@ -32,21 +32,26 @@ var KnowsContactsMaxWait = 12 * time.Second
 // GetContactListWait is GetContactList for a caller that can wait up to wait
 // (at most KnowsContactsMaxWait) for the login's first contact list (Knows,
 // wait_ms). It answers as soon as the connector says the list is ready
-// (bridgev2.KnowsContactListReadyNetworkAPI); a connector that cannot tell is
-// answered at once, as GetContactList, and so is a login the network rate
+// (bridgev2.KnowsContactListReadyNetworkAPI); a connector that cannot tell
+// (no interface, or a nil channel) is answered at once, as GetContactList,
+// without knows_list_ready, and so is a login the network rate
 // limits (bridgev2.KnowsContactsRateLimitedNetworkAPI), whose answer carries
 // rate_limited. Each answer is logged with its timing.
 func GetContactListWait(ctx context.Context, login *bridgev2.UserLogin, wait time.Duration) (*RespGetContactList, error) {
 	start := time.Now()
 	var listReady *bool
 	if wait > 0 && login.Client != nil && login.Client.IsLoggedIn() {
+		// A nil channel means the connector cannot tell (e.g. its switch is off): answered
+		// at once without knows_list_ready, as a connector without the interface.
 		if readyAPI, ok := login.Client.(bridgev2.KnowsContactListReadyNetworkAPI); ok {
-			capped := min(wait, KnowsContactsMaxWait)
-			if knowsContactsRateLimited(login) != nil {
-				capped = 0
+			if readyChan := readyAPI.KnowsContactListReady(); readyChan != nil {
+				capped := min(wait, KnowsContactsMaxWait)
+				if knowsContactsRateLimited(login) != nil {
+					capped = 0
+				}
+				ready := knowsWaitContactList(ctx, readyChan, capped)
+				listReady = &ready
 			}
-			ready := knowsWaitContactList(ctx, readyAPI, capped)
-			listReady = &ready
 		}
 	}
 	waited := time.Since(start)
@@ -69,8 +74,12 @@ func knowsContactsRateLimited(login *bridgev2.UserLogin) *bridgev2.KnowsRateLimi
 	return nil
 }
 
-func knowsWaitContactList(ctx context.Context, api bridgev2.KnowsContactListReadyNetworkAPI, wait time.Duration) bool {
-	ready := api.KnowsContactListReady()
+// knowsWaitContactList waits up to wait for ready to be closed. A nil ready
+// (the connector cannot tell) is never waited on.
+func knowsWaitContactList(ctx context.Context, ready <-chan struct{}, wait time.Duration) bool {
+	if ready == nil {
+		return false
+	}
 	select {
 	case <-ready:
 		return true

@@ -28,7 +28,11 @@ import (
 type KnowsContactListReadyNetworkAPI interface {
 	ContactListingNetworkAPI
 	// KnowsContactListReady returns a channel closed once the first contact
-	// list of the login is ready (already closed when it is).
+	// list of the login is ready (already closed when it is). A nil channel
+	// means the connector cannot tell (e.g. its switch is off): the request is
+	// answered at once without knows_list_ready, as for a connector without
+	// this interface. Never return a closed channel for "cannot tell": the app
+	// would read an empty list as final.
 	KnowsContactListReady() <-chan struct{}
 }
 
