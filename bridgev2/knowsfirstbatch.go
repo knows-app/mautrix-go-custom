@@ -119,13 +119,14 @@ func knowsRoomReadyFromContext(ctx context.Context) func() {
 
 // knowsCreateForwardBackfill is the initial forward backfill of a room
 // createMatrixRoomInLoop just created. Without WithKnowsFirstBatch it is
-// doForwardBackfill, unchanged.
+// doForwardBackfill, unchanged (with KNOWS_BACKWARD_DUE_NOW, the backward task
+// is then made due: knowsInitialForwardBackfill).
 func (portal *Portal) knowsCreateForwardBackfill(ctx context.Context, source *UserLogin, bundle any) {
 	req := knowsFirstBatchFromContext(ctx)
 	limit := portal.Bridge.Config.Backfill.MaxInitialMessages
 	// Without batch sending the rest could not be written above the first batch: one pass, as upstream.
 	if req == nil || bundle != nil || limit <= KnowsFirstBatchSize || !portal.Bridge.Matrix.GetCapabilities().BatchSending {
-		portal.doForwardBackfill(ctx, source, nil, bundle)
+		portal.knowsInitialForwardBackfill(ctx, source, bundle, req != nil)
 		portal.knowsFirstBatchWritten(source)
 		if req != nil {
 			portal.knowsMakeBackfillTaskDue(ctx, source)
