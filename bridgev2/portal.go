@@ -5846,6 +5846,7 @@ func (portal *Portal) createMatrixRoomInLoop(ctx context.Context, source *UserLo
 	} else {
 		portal.knowsFirstBatchWritten(source)
 		knowsFirstBatchFromContext(ctx).done()
+		portal.knowsHistoryDoneAfterForward(ctx, source)
 	}
 	return nil
 }

@@ -37,6 +37,13 @@ const (
 // KnowsCallbacksEnv turns the Knows callbacks on ("1"). Unset, nothing is sent.
 const KnowsCallbacksEnv = "KNOWS_CALLBACKS"
 
+// KnowsPortalReadyHistoryDoneEnv turns on the history-done portal-ready ("1"):
+// once the bridge will write nothing more of a room's history, portal-ready is
+// posted again with "history_done": true and "messages" (knowshistorydone.go).
+// It needs KNOWS_CALLBACKS. Unset, no such post is made and no database read is
+// added.
+const KnowsPortalReadyHistoryDoneEnv = "KNOWS_PORTAL_READY_HISTORY_DONE"
+
 // KnowsFlag reports whether the environment variable name is set to 1, true,
 // yes or on. Unset (the default) is off: every Knows behaviour change is off
 // until its flag is set.
@@ -92,6 +99,11 @@ type KnowsCallbacks struct {
 	pendingLock sync.Mutex
 	pending     map[networkid.UserLoginID]*knowsPendingChanges
 	inflight    sync.WaitGroup
+
+	// historyDone is KNOWS_PORTAL_READY_HISTORY_DONE, read once at start.
+	historyDone bool
+	// historyDoneSent holds the rooms already told history_done, so each is told once.
+	historyDoneSent sync.Map
 }
 
 type knowsPendingChanges struct {
@@ -121,14 +133,22 @@ func NewKnowsCallbacks(statusEndpoint, asToken string, log zerolog.Logger) *Know
 		client:  &http.Client{},
 		log:     log.With().Str("component", "knows callbacks").Logger(),
 		pending: make(map[networkid.UserLoginID]*knowsPendingChanges),
+
+		historyDone: KnowsFlag(KnowsPortalReadyHistoryDoneEnv),
 	}
 }
 
+// knowsPortalReadyBody is knows-api's PortalReady model. history_done and
+// messages are only in the history-done post (omitempty): every other body is
+// byte for byte the one before them. messages is a pointer so that 0 is sent.
+// The same fields as mautrix-meta-custom's pkg/knowscallbacks.PortalReadyBody.
 type knowsPortalReadyBody struct {
-	LoginID    string `json:"login_id"`
-	ThreadID   string `json:"thread_id"`
-	RoomID     string `json:"room_id"`
-	FirstBatch bool   `json:"first_batch"`
+	LoginID     string `json:"login_id"`
+	ThreadID    string `json:"thread_id"`
+	RoomID      string `json:"room_id"`
+	FirstBatch  bool   `json:"first_batch"`
+	HistoryDone bool   `json:"history_done,omitempty"`
+	Messages    *int   `json:"messages,omitempty"`
 }
 
 type knowsContactsStagedBody struct {
@@ -151,6 +171,31 @@ func (kc *KnowsCallbacks) PortalReady(loginID networkid.UserLoginID, threadID ne
 	kc.post(KnowsPortalReadyPath, knowsPortalReadyBody{
 		LoginID: string(loginID), ThreadID: string(threadID), RoomID: string(roomID), FirstBatch: firstBatch,
 	})
+}
+
+// HistoryDoneOn reports whether the history-done portal-ready is on
+// (KNOWS_CALLBACKS and KNOWS_PORTAL_READY_HISTORY_DONE).
+func (kc *KnowsCallbacks) HistoryDoneOn() bool {
+	return kc != nil && kc.historyDone
+}
+
+// PortalHistoryDone says the bridge will write nothing more of a room's
+// history: portal-ready with "first_batch": true, "history_done": true and
+// "messages", the number of messages the bridge holds for the room. It is sent
+// once per room for the process, and only with KNOWS_PORTAL_READY_HISTORY_DONE.
+// It reports whether it was sent.
+func (kc *KnowsCallbacks) PortalHistoryDone(loginID networkid.UserLoginID, threadID networkid.PortalID, roomID id.RoomID, messages int) bool {
+	if !kc.HistoryDoneOn() || loginID == "" || roomID == "" {
+		return false
+	} else if _, sent := kc.historyDoneSent.LoadOrStore(roomID, struct{}{}); sent {
+		return false
+	}
+	messages = max(messages, 0)
+	kc.post(KnowsPortalReadyPath, knowsPortalReadyBody{
+		LoginID: string(loginID), ThreadID: string(threadID), RoomID: string(roomID),
+		FirstBatch: true, HistoryDone: true, Messages: &messages,
+	})
+	return true
 }
 
 // ContactsStaged says the contact list of a login changed: its first list is
