@@ -27,6 +27,8 @@ type knowsFakeMatrix struct {
 	mu      sync.Mutex
 	batches []knowsBatch
 	noBatch bool
+	// batchErr, when set, is the answer to every batch send (recorded first).
+	batchErr error
 }
 
 type knowsBatch struct {
@@ -49,6 +51,9 @@ func (m *knowsFakeMatrix) BatchSend(_ context.Context, _ id.RoomID, req *mautrix
 	m.mu.Lock()
 	m.batches = append(m.batches, b)
 	m.mu.Unlock()
+	if m.batchErr != nil {
+		return nil, m.batchErr
+	}
 	return &mautrix.RespBeeperBatchSend{}, nil
 }
 

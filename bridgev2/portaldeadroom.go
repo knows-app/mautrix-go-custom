@@ -49,16 +49,34 @@ func (portal *Portal) RoomIsGone(ctx context.Context) bool {
 // the portal's message and reaction rows, which belong to the old room: a fresh room re-inserts the same message
 // IDs, and forward backfill anchors on the newest message row, so leftovers would make the new room's first fill
 // fetch nothing, or drop what it fetched as duplicates.
+//
+// The deletes and the cleared mxid are one transaction: when saving the portal fails, the rows stay with the old
+// room and the portal keeps its mxid, in memory too.
 func (portal *Portal) ForgetDeadRoom(ctx context.Context) error {
-	for _, tbl := range []string{"reaction", "message"} {
-		if _, err := portal.Bridge.DB.Exec(ctx,
-			"DELETE FROM "+tbl+" WHERE bridge_id=$1 AND room_id=$2 AND room_receiver=$3",
-			portal.Bridge.DB.BridgeID, portal.ID, portal.Receiver,
-		); err != nil {
-			return fmt.Errorf("clear old %s rows: %w", tbl, err)
+	oldMXID, oldRelay, oldRelayLoginID := portal.MXID, portal.Relay, portal.RelayLoginID
+	wasCreated := portal.RoomCreated != nil && portal.RoomCreated.IsSet()
+	err := portal.Bridge.DB.DoTxn(ctx, nil, func(ctx context.Context) error {
+		for _, tbl := range []string{"reaction", "message"} {
+			if _, err := portal.Bridge.DB.Exec(ctx,
+				"DELETE FROM "+tbl+" WHERE bridge_id=$1 AND room_id=$2 AND room_receiver=$3",
+				portal.Bridge.DB.BridgeID, portal.ID, portal.Receiver,
+			); err != nil {
+				return fmt.Errorf("clear old %s rows: %w", tbl, err)
+			}
 		}
+		// RemoveMXID saves the portal with this ctx, so inside the transaction.
+		return portal.RemoveMXID(ctx)
+	})
+	if err != nil && oldMXID != "" && portal.MXID == "" {
+		portal.MXID, portal.Relay, portal.RelayLoginID = oldMXID, oldRelay, oldRelayLoginID
+		if wasCreated {
+			portal.RoomCreated.Set()
+		}
+		portal.Bridge.cacheLock.Lock()
+		portal.Bridge.portalsByMXID[oldMXID] = portal
+		portal.Bridge.cacheLock.Unlock()
 	}
-	return portal.RemoveMXID(ctx)
+	return err
 }
 
 // RecoverDeadRoom forgets the portal's room when it is gone, so the caller creates a fresh one.
@@ -74,4 +92,26 @@ func (portal *Portal) RecoverDeadRoom(ctx context.Context) bool {
 	}
 	log.Warn().Msg("Portal room was gone from the homeserver; it will be re-created")
 	return true
+}
+
+// ErrPortalHasNoRoom is the error of a backfill of a portal that has no Matrix room (never created, or forgotten
+// by ForgetDeadRoom). Nothing is fetched or written: a write to an empty room ID only fails with a bare 404.
+var ErrPortalHasNoRoom = errors.New("portal has no Matrix room")
+
+// KnowsRecoverDeadRoomOnWriteEnv turns on ("1") the recovery of a room found gone by a write. Unset, a room
+// deleted behind the bridge is only forgotten when a user picks the DM (create_dm), as before.
+const KnowsRecoverDeadRoomOnWriteEnv = "KNOWS_RECOVER_DEAD_ROOM_ON_WRITE"
+
+// knowsRecoverDeadRoomOnWrite is called with the error of a write into the portal's room (backfill batch,
+// remote event). With KNOWS_RECOVER_DEAD_ROOM_ON_WRITE, an M_NOT_FOUND or M_FORBIDDEN makes it check that the
+// room is gone (RoomIsGone, a definite answer only) and forget it (RecoverDeadRoom), so the next resync or pick
+// creates a fresh room instead of failing at every start. It reports whether the room was forgotten.
+func (portal *Portal) knowsRecoverDeadRoomOnWrite(ctx context.Context, err error) bool {
+	if err == nil || portal.MXID == "" || !KnowsFlag(KnowsRecoverDeadRoomOnWriteEnv) {
+		return false
+	}
+	if !errors.Is(err, mautrix.MNotFound) && !errors.Is(err, mautrix.MForbidden) {
+		return false
+	}
+	return portal.RecoverDeadRoom(ctx)
 }
