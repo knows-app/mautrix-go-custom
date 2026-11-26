@@ -21,6 +21,9 @@ type RespGetContactList struct {
 	// Knows: present only when the request asked for wait_ms and the bridge can tell when its
 	// first contact list is ready: true once it is, false when the wait ran out first.
 	KnowsListReady *bool `json:"knows_list_ready,omitempty"`
+	// Knows: present only while the network rate limits the login
+	// (bridgev2.KnowsContactsRateLimitedNetworkAPI).
+	RateLimited *bridgev2.KnowsRateLimit `json:"rate_limited,omitempty"`
 }
 
 // KnowsContactsMaxWait caps the wait_ms of a contact list request.
@@ -30,13 +33,19 @@ var KnowsContactsMaxWait = 12 * time.Second
 // (at most KnowsContactsMaxWait) for the login's first contact list (Knows,
 // wait_ms). It answers as soon as the connector says the list is ready
 // (bridgev2.KnowsContactListReadyNetworkAPI); a connector that cannot tell is
-// answered at once, as GetContactList. Each answer is logged with its timing.
+// answered at once, as GetContactList, and so is a login the network rate
+// limits (bridgev2.KnowsContactsRateLimitedNetworkAPI), whose answer carries
+// rate_limited. Each answer is logged with its timing.
 func GetContactListWait(ctx context.Context, login *bridgev2.UserLogin, wait time.Duration) (*RespGetContactList, error) {
 	start := time.Now()
 	var listReady *bool
 	if wait > 0 && login.Client != nil && login.Client.IsLoggedIn() {
 		if readyAPI, ok := login.Client.(bridgev2.KnowsContactListReadyNetworkAPI); ok {
-			ready := knowsWaitContactList(ctx, readyAPI, min(wait, KnowsContactsMaxWait))
+			capped := min(wait, KnowsContactsMaxWait)
+			if knowsContactsRateLimited(login) != nil {
+				capped = 0
+			}
+			ready := knowsWaitContactList(ctx, readyAPI, capped)
 			listReady = &ready
 		}
 	}
@@ -46,8 +55,18 @@ func GetContactListWait(ctx context.Context, login *bridgev2.UserLogin, wait tim
 		return nil, err
 	}
 	resp.KnowsListReady = listReady
+	resp.RateLimited = knowsContactsRateLimited(login)
 	logContactListAnswer(ctx, login, resp, start, waited, wait)
 	return resp, nil
+}
+
+// knowsContactsRateLimited is the login's current rate limit, nil when the
+// connector cannot tell or knows none.
+func knowsContactsRateLimited(login *bridgev2.UserLogin) *bridgev2.KnowsRateLimit {
+	if limitedAPI, ok := login.Client.(bridgev2.KnowsContactsRateLimitedNetworkAPI); ok {
+		return limitedAPI.KnowsContactsRateLimited()
+	}
+	return nil
 }
 
 func knowsWaitContactList(ctx context.Context, api bridgev2.KnowsContactListReadyNetworkAPI, wait time.Duration) bool {
@@ -56,6 +75,9 @@ func knowsWaitContactList(ctx context.Context, api bridgev2.KnowsContactListRead
 	case <-ready:
 		return true
 	default:
+	}
+	if wait <= 0 {
+		return false
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
@@ -81,6 +103,9 @@ func logContactListAnswer(ctx context.Context, login *bridgev2.UserLogin, resp *
 		Int("contacts_count", len(resp.Contacts))
 	if resp.KnowsListReady != nil {
 		evt = evt.Bool("contacts_list_ready", *resp.KnowsListReady)
+	}
+	if resp.RateLimited != nil {
+		evt = evt.Int("contacts_rate_limited_s", resp.RateLimited.RetryAfterS)
 	}
 	if staged, ok := login.Client.(interface {
 		KnowsStaged() (int, bool, bool)

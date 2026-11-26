@@ -9,6 +9,7 @@ package bridgev2
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Knows: "first contact list ready".
@@ -75,6 +76,41 @@ func (s *KnowsContactListState) Staged(login *UserLogin, count int, complete boo
 // whether Staged was called at all.
 func (s *KnowsContactListState) KnowsStaged() (count int, complete, ready bool) {
 	return int(s.count.Load()), s.complete.Load(), s.closed.Load()
+}
+
+// KnowsRateLimit is a limit the network puts on a login, as the contact list
+// reports it (rate_limited): {"errcode": "...", "retry_after_s": N,
+// "until_ms": T}. retry_after_s is whole seconds, at least 1; until_ms is the
+// same instant in Unix milliseconds.
+type KnowsRateLimit struct {
+	Errcode     string `json:"errcode"`
+	RetryAfterS int    `json:"retry_after_s"`
+	UntilMS     int64  `json:"until_ms"`
+}
+
+// KnowsRateLimitUntil is the KnowsRateLimit of a limit that ends at until, or
+// nil when until is already past.
+func KnowsRateLimitUntil(errcode string, until time.Time) *KnowsRateLimit {
+	left := time.Until(until)
+	if left <= 0 {
+		return nil
+	}
+	return &KnowsRateLimit{
+		Errcode:     errcode,
+		RetryAfterS: max(1, int((left+time.Second-1)/time.Second)),
+		UntilMS:     until.UnixMilli(),
+	}
+}
+
+// KnowsContactsRateLimitedNetworkAPI is a client that can tell its network is
+// rate limiting the login. GET /v3/contacts then carries rate_limited, and
+// wait_ms answers at once instead of waiting for a list the limit holds back.
+// A connector whose first list gets held while a request waits calls Staged
+// (KnowsContactListState) when the hold starts, which releases the request.
+type KnowsContactsRateLimitedNetworkAPI interface {
+	// KnowsContactsRateLimited returns the login's current limit, nil when no
+	// limit is known.
+	KnowsContactsRateLimited() *KnowsRateLimit
 }
 
 // KnowsFirstContactsAnswer reports whether this is the first contact list
