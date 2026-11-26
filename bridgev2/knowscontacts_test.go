@@ -61,3 +61,13 @@ func TestKnowsContactListStagedPostsContactsStaged(t *testing.T) {
 	quiet.Staged(&UserLogin{UserLogin: &database.UserLogin{ID: "login-2"}, Bridge: &Bridge{}}, 1, false)
 	<-quiet.KnowsContactListReady()
 }
+
+func TestKnowsRateLimitUntil(t *testing.T) {
+	until := time.Now().Add(1500 * time.Millisecond)
+	limit := KnowsRateLimitUntil("FI.MAU.LINKEDIN.RATE_LIMITED", until)
+	require.Equal(t, "FI.MAU.LINKEDIN.RATE_LIMITED", limit.Errcode)
+	require.Equal(t, 2, limit.RetryAfterS, "whole seconds, rounded up")
+	require.Equal(t, until.UnixMilli(), limit.UntilMS)
+	require.Equal(t, 1, KnowsRateLimitUntil("X", time.Now().Add(time.Millisecond)).RetryAfterS, "at least 1 s")
+	require.Nil(t, KnowsRateLimitUntil("X", time.Now().Add(-time.Second)), "a limit in the past is no limit")
+}

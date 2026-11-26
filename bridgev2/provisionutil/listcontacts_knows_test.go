@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -125,4 +126,91 @@ func TestKnowsContactListAnswerIsMeasured(t *testing.T) {
 	require.Equal(t, true, first["contacts_list_ready"])
 	require.NotContains(t, second, "contacts_first_answer_ms", "only the login's first answer")
 	require.NotContains(t, buf.String(), "login-1", "no login id in the measure")
+}
+
+// knowsLimitedClient is a ready-signalling client whose network may be rate limiting the login.
+type knowsLimitedClient struct {
+	knowsReadyClient
+	mu    sync.Mutex
+	limit *bridgev2.KnowsRateLimit
+}
+
+func (c *knowsLimitedClient) KnowsContactsRateLimited() *bridgev2.KnowsRateLimit {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.limit
+}
+
+func (c *knowsLimitedClient) setLimit(limit *bridgev2.KnowsRateLimit) {
+	c.mu.Lock()
+	c.limit = limit
+	c.mu.Unlock()
+}
+
+// LinkedIn bug 5: a login whose first page answered 429 waited the full 12 s for an empty list, and the app
+// could not tell a limit from an empty account.
+func TestKnowsContactListOfARateLimitedLoginAnswersAtOnce(t *testing.T) {
+	client := &knowsLimitedClient{}
+	client.setLimit(&bridgev2.KnowsRateLimit{Errcode: "FI.MAU.LINKEDIN.RATE_LIMITED", RetryAfterS: 120, UntilMS: 1795601420000})
+	start := time.Now()
+	resp, err := GetContactListWait(context.Background(), knowsLogin(client), 5*time.Second)
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 100*time.Millisecond, "no wait for a list the limit holds back")
+	require.False(t, *resp.KnowsListReady)
+	require.Empty(t, resp.Contacts)
+	data, err := json.Marshal(resp)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"contacts":[],"knows_list_ready":false,
+		"rate_limited":{"errcode":"FI.MAU.LINKEDIN.RATE_LIMITED","retry_after_s":120,"until_ms":1795601420000}}`, string(data))
+
+	// Without wait_ms, the limit is still reported.
+	resp, err = GetContactListWait(context.Background(), knowsLogin(client), 0)
+	require.NoError(t, err)
+	require.Equal(t, 120, resp.RateLimited.RetryAfterS)
+
+	// No limit: no field, as before.
+	client.setLimit(nil)
+	client.Staged(nil, 0, true)
+	resp, err = GetContactListWait(context.Background(), knowsLogin(client), 5*time.Second)
+	require.NoError(t, err)
+	data, err = json.Marshal(resp)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "rate_limited")
+}
+
+// A limit hit while a request waits releases it through Staged, the connector's event, not the cap.
+func TestKnowsContactListLimitedDuringTheWaitIsReleasedByTheEvent(t *testing.T) {
+	client := &knowsLimitedClient{}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		client.setLimit(bridgev2.KnowsRateLimitUntil("FI.MAU.LINKEDIN.RATE_LIMITED", time.Now().Add(2*time.Minute)))
+		client.Staged(nil, 0, false)
+	}()
+	start := time.Now()
+	resp, err := GetContactListWait(context.Background(), knowsLogin(client), 5*time.Second)
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 2*time.Second)
+	require.NotNil(t, resp.RateLimited)
+	require.Equal(t, 120, resp.RateLimited.RetryAfterS)
+}
+
+// knowsUnknownReadyClient implements the interface but cannot tell (a connector whose switch is off): nil channel.
+type knowsUnknownReadyClient struct {
+	knowsContactsClient
+}
+
+func (c *knowsUnknownReadyClient) KnowsContactListReady() <-chan struct{} { return nil }
+
+// Meta #110 with its switch off answered a closed channel, so knows_list_ready=true on a list that could still
+// be empty. A nil channel now means "cannot tell": answered at once, without knows_list_ready.
+func TestKnowsContactListNilReadyChannelAnswersAtOnce(t *testing.T) {
+	start := time.Now()
+	resp, err := GetContactListWait(context.Background(), knowsLogin(&knowsUnknownReadyClient{knowsContactsClient{contacts: 1}}), 5*time.Second)
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 50*time.Millisecond)
+	require.Nil(t, resp.KnowsListReady)
+	data, err := json.Marshal(resp)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "knows_list_ready")
+	require.False(t, knowsWaitContactList(context.Background(), nil, time.Hour), "never blocks on nil")
 }
