@@ -36,16 +36,22 @@ var KnowsContactsMaxWait = 12 * time.Second
 // (no interface, or a nil channel) is answered at once, as GetContactList,
 // without knows_list_ready, and so is a login the network rate
 // limits (bridgev2.KnowsContactsRateLimitedNetworkAPI), whose answer carries
-// rate_limited. Each answer is logged with its timing.
+// rate_limited. A login that is still connecting is waited for first
+// (bridgev2.UserLogin.KnowsWaitLoggedIn), and that time counts in wait. Each
+// answer is logged with its timing.
 func GetContactListWait(ctx context.Context, login *bridgev2.UserLogin, wait time.Duration) (*RespGetContactList, error) {
 	start := time.Now()
+	if !knowsLoggedIn(ctx, login) {
+		return nil, bridgev2.ErrNotLoggedIn
+	}
 	var listReady *bool
-	if wait > 0 && login.Client != nil && login.Client.IsLoggedIn() {
+	if wait > 0 {
 		// A nil channel means the connector cannot tell (e.g. its switch is off): answered
 		// at once without knows_list_ready, as a connector without the interface.
 		if readyAPI, ok := login.Client.(bridgev2.KnowsContactListReadyNetworkAPI); ok {
 			if readyChan := readyAPI.KnowsContactListReady(); readyChan != nil {
-				capped := min(wait, KnowsContactsMaxWait)
+				// The time spent waiting for the login to connect counts in the caller's wait.
+				capped := min(wait, KnowsContactsMaxWait) - time.Since(start)
 				if knowsContactsRateLimited(login) != nil {
 					capped = 0
 				}
@@ -63,6 +69,25 @@ func GetContactListWait(ctx context.Context, login *bridgev2.UserLogin, wait tim
 	resp.RateLimited = knowsContactsRateLimited(login)
 	logContactListAnswer(ctx, login, resp, start, waited, wait)
 	return resp, nil
+}
+
+// knowsLoggedIn is whether the login's client is logged in, waiting up to
+// bridgev2.KnowsLoginStartWait for a login that is still connecting (Knows:
+// the app asks for the contacts right after the last login step, before the
+// client is connected). The wait is logged when there was one.
+func knowsLoggedIn(ctx context.Context, login *bridgev2.UserLogin) bool {
+	if login.Client != nil && login.Client.IsLoggedIn() {
+		return true
+	}
+	start := time.Now()
+	loggedIn := login.KnowsWaitLoggedIn(ctx, bridgev2.KnowsLoginStartWait())
+	if waited := time.Since(start); waited >= time.Millisecond {
+		zerolog.Ctx(ctx).Info().
+			Int64("login_waited_ms", waited.Milliseconds()).
+			Bool("logged_in", loggedIn).
+			Msg("Waited for a connecting login")
+	}
+	return loggedIn
 }
 
 // knowsContactsRateLimited is the login's current rate limit, nil when the
@@ -134,7 +159,7 @@ type RespSearchUsers struct {
 }
 
 func GetContactList(ctx context.Context, login *bridgev2.UserLogin) (*RespGetContactList, error) {
-	if login.Client == nil || !login.Client.IsLoggedIn() {
+	if !knowsLoggedIn(ctx, login) {
 		return nil, bridgev2.ErrNotLoggedIn
 	}
 	api, ok := login.Client.(bridgev2.ContactListingNetworkAPI)
@@ -156,7 +181,7 @@ func GetContactList(ctx context.Context, login *bridgev2.UserLogin) (*RespGetCon
 }
 
 func SearchUsers(ctx context.Context, login *bridgev2.UserLogin, query string) (*RespSearchUsers, error) {
-	if login.Client == nil || !login.Client.IsLoggedIn() {
+	if !knowsLoggedIn(ctx, login) {
 		return nil, bridgev2.ErrNotLoggedIn
 	}
 	api, ok := login.Client.(bridgev2.UserSearchingNetworkAPI)
